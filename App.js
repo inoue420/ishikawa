@@ -18,6 +18,7 @@ import BillingScreen from './screens/BillingScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import UserRegisterScreen from './screens/UserRegisterScreen';
 import MaterialRegisterScreen from './screens/MaterialRegisterScreen';
+import ProjectRegisterScreen from './screens/ProjectRegisterScreen';
 
 const Tab = createBottomTabNavigator();
 const ProfileStack = createStackNavigator();
@@ -39,6 +40,11 @@ function ProfileStackScreen() {
         name="MaterialRegister"
         component={MaterialRegisterScreen}
         options={{ title: '資材登録' }}
+      />
+      <ProfileStack.Screen
+        name="ProjectRegister"
+        component={ProjectRegisterScreen}
+        options={{ title: 'プロジェクト登録' }}
       />
     </ProfileStack.Navigator>
   );
