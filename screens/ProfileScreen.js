@@ -11,7 +11,6 @@ export default function ProfileScreen({ navigation }) {
   const [role, setRole] = useState('staff');
   const [loading, setLoading] = useState(false);
 
-  // プロフィール読み込み
   useEffect(() => {
     (async () => {
       try {
@@ -27,7 +26,6 @@ export default function ProfileScreen({ navigation }) {
     })();
   }, []);
 
-  // プロフィール保存
   const handleSave = async () => {
     setLoading(true);
     try {
@@ -44,7 +42,6 @@ export default function ProfileScreen({ navigation }) {
     }
   };
 
-  // ログアウト（デバッグ用）
   const handleLogout = () => {
     navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
   };
@@ -81,20 +78,32 @@ export default function ProfileScreen({ navigation }) {
         disabled={loading}
       />
 
-      <View style={tw`mt-6 space-y-2`}>        
-        <Button
-          title="ユーザー登録"
-          onPress={() => navigation.navigate('UserRegister')}
-        />
-        <Button
-          title="資材登録"
-          onPress={() => navigation.navigate('MaterialRegister')}
-        />
-        <Button
-          title="ログアウト"
-          onPress={handleLogout}
-          color="red"
-        />
+      <View style={tw`mt-6`}>
+        <View style={tw`mb-2`}>
+          <Button
+            title="ユーザー登録"
+            onPress={() => navigation.navigate('UserRegister')}
+          />
+        </View>
+        <View style={tw`mb-2`}>
+          <Button
+            title="資材登録"
+            onPress={() => navigation.navigate('MaterialRegister')}
+          />
+        </View>
+        <View style={tw`mb-2`}>
+          <Button
+            title="プロジェクト登録"
+            onPress={() => navigation.navigate('ProjectRegister')}
+          />
+        </View>
+        <View>
+          <Button
+            title="ログアウト"
+            onPress={handleLogout}
+            color="red"
+          />
+        </View>
       </View>
     </ScrollView>
   );
