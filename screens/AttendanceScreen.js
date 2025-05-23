@@ -1,14 +1,7 @@
 // screens/AttendanceScreen.js
 
 import React, { useEffect, useState } from 'react';
-import {
-  ScrollView,
-  View,
-  Text,
-  Button,
-  Alert,
-  FlatList,
-} from 'react-native';
+import { View, Text, Button, Alert, FlatList } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import tw from 'twrnc';
 
@@ -50,48 +43,41 @@ export default function AttendanceScreen({ navigation }) {
     setLoading(false);
   };
 
-  // リストレンダー
+  // レコードレンダー
   const renderItem = ({ item }) => (
-    <View style={tw`flex-row justify-between bg-white p-3 rounded mb-2`}>
+    <View style={tw`flex-row justify-between bg-white p-3 rounded mb-2`}>      
       <Text>{item.type === 'checkin' ? '出勤' : '退勤'}</Text>
       <Text>{new Date(item.timestamp).toLocaleString()}</Text>
     </View>
   );
 
-  return (
-    <ScrollView contentContainerStyle={tw`p-4 bg-gray-100 flex-grow`}>
+  // FlatList Header
+  const ListHeader = () => (
+    <View style={tw`p-4 bg-gray-100`}>      
       <Text style={tw`text-xl font-bold mb-4`}>工数管理 (出退勤)</Text>
-
-      <View style={tw`flex-row justify-between mb-4`}>
-        <Button
-          title={loading ? '...' : '出勤記録'}
-          onPress={() => handleCheck('checkin')}
-          disabled={loading}
-        />
-        <Button
-          title={loading ? '...' : '退勤記録'}
-          onPress={() => handleCheck('checkout')}
-          disabled={loading}
-        />
+      <View style={tw`flex-row justify-between mb-4`}>        
+        <Button title={loading ? '...' : '出勤記録'} onPress={() => handleCheck('checkin')} disabled={loading} />
+        <Button title={loading ? '...' : '退勤記録'} onPress={() => handleCheck('checkout')} disabled={loading} />
       </View>
-
       <Text style={tw`text-lg font-semibold mb-2`}>履歴</Text>
-      {records.length === 0 ? (
-        <Text style={tw`text-center text-gray-500`}>記録がありません</Text>
-      ) : (
-        <FlatList
-          data={records}
-          keyExtractor={(_, index) => index.toString()}
-          renderItem={renderItem}
-        />
-      )}
+    </View>
+  );
 
-      <View style={tw`mt-6`}>
-        <Button
-          title="ログイン画面に戻る"
-          onPress={() => navigation.navigate('Login')}
-        />
-      </View>
-    </ScrollView>
+  // FlatList Footer
+  const ListFooter = () => (
+    <View style={tw`p-4 bg-gray-100`}>      
+      <Button title="ログイン画面に戻る" onPress={() => navigation.navigate('Login')} />
+    </View>
+  );
+
+  return (
+    <FlatList
+      data={records}
+      keyExtractor={(_, index) => index.toString()}
+      renderItem={renderItem}
+      ListHeaderComponent={ListHeader}
+      ListFooterComponent={ListFooter}
+      contentContainerStyle={tw`bg-gray-100`}
+    />
   );
 }

@@ -1,59 +1,92 @@
 // App.js
 
 import 'react-native-gesture-handler';
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createStackNavigator } from '@react-navigation/stack';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
-// Auth Screens
-import LoginScreen from './screens/LoginScreen';
-import SignUpScreen from './screens/SignUpScreen';
-import ForgotPasswordScreen from './screens/ForgotPasswordScreen';
-
-// App Tabs Screens
+// Main Screens
 import HomeScreen from './screens/HomeScreen';
 import AttendanceScreen from './screens/AttendanceScreen';
 import MaterialsScreen from './screens/MaterialsScreen';
 import WIPScreen from './screens/WIPScreen';
 import BillingScreen from './screens/BillingScreen';
+
+// Profile and Registration Screens
 import ProfileScreen from './screens/ProfileScreen';
+import UserRegisterScreen from './screens/UserRegisterScreen';
+import MaterialRegisterScreen from './screens/MaterialRegisterScreen';
 
-const AuthStack = createStackNavigator();
 const Tab = createBottomTabNavigator();
+const ProfileStack = createStackNavigator();
 
-function AppTabs() {
+function ProfileStackScreen() {
   return (
-    <Tab.Navigator>
-      <Tab.Screen name="Home" component={HomeScreen} />
-      <Tab.Screen name="Attendance" component={AttendanceScreen} />
-      <Tab.Screen name="Materials" component={MaterialsScreen} />
-      <Tab.Screen name="WIP" component={WIPScreen} />
-      <Tab.Screen name="Billing" component={BillingScreen} />
-      <Tab.Screen name="Profile" component={ProfileScreen} />
-    </Tab.Navigator>
+    <ProfileStack.Navigator screenOptions={{ headerTitleAlign: 'center' }}>
+      <ProfileStack.Screen
+        name="ProfileMain"
+        component={ProfileScreen}
+        options={{ title: 'プロフィール' }}
+      />
+      <ProfileStack.Screen
+        name="UserRegister"
+        component={UserRegisterScreen}
+        options={{ title: 'ユーザー登録' }}
+      />
+      <ProfileStack.Screen
+        name="MaterialRegister"
+        component={MaterialRegisterScreen}
+        options={{ title: '資材登録' }}
+      />
+    </ProfileStack.Navigator>
   );
 }
 
 export default function App() {
-  // TODO: Firebase Auth の状態を取得して置き換え
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-
-  useEffect(() => {
-    // 認証状態のサブスクライブなどをここで実装予定
-  }, []);
-
   return (
     <NavigationContainer>
-      {isLoggedIn ? (
-        <AppTabs />
-      ) : (
-        <AuthStack.Navigator>
-          <AuthStack.Screen name="Login" component={LoginScreen} />
-          <AuthStack.Screen name="SignUp" component={SignUpScreen} />
-          <AuthStack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
-        </AuthStack.Navigator>
-      )}
+      <Tab.Navigator
+        screenOptions={({ route }) => ({
+          tabBarIcon: ({ color, size }) => {
+            let iconName;
+            switch (route.name) {
+              case 'Home':
+                iconName = 'home-outline';
+                break;
+              case 'Attendance':
+                iconName = 'time-outline';
+                break;
+              case 'Materials':
+                iconName = 'cube-outline';
+                break;
+              case 'WIP':
+                iconName = 'construct-outline';
+                break;
+              case 'Billing':
+                iconName = 'document-text-outline';
+                break;
+              case 'Profile':
+                iconName = 'person-circle-outline';
+                break;
+              default:
+                iconName = 'ellipse-outline';
+            }
+            return <Ionicons name={iconName} size={size} color={color} />;
+          },
+          tabBarActiveTintColor: '#007AFF',
+          tabBarInactiveTintColor: 'gray',
+          headerShown: false,
+        })}
+      >
+        <Tab.Screen name="Home" component={HomeScreen} />
+        <Tab.Screen name="Attendance" component={AttendanceScreen} />
+        <Tab.Screen name="Materials" component={MaterialsScreen} />
+        <Tab.Screen name="WIP" component={WIPScreen} />
+        <Tab.Screen name="Billing" component={BillingScreen} />
+        <Tab.Screen name="Profile" component={ProfileStackScreen} />
+      </Tab.Navigator>
     </NavigationContainer>
   );
 }
