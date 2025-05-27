@@ -2,17 +2,21 @@
 
 import React, { useEffect, useState } from 'react';
 import {
-  ScrollView,
   View,
   Text,
   TextInput,
   Button,
   Alert,
+  ScrollView,
+  Dimensions,
+  TouchableOpacity,
   Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
+
+const { width } = Dimensions.get('window');
 
 export default function ProjectRegisterScreen() {
   const STORAGE_KEY = '@project_list';
@@ -20,23 +24,23 @@ export default function ProjectRegisterScreen() {
   const [name, setName] = useState('');
   const [startDate, setStartDate] = useState(new Date());
   const [endDate, setEndDate] = useState(new Date());
+  const [showStartPicker, setShowStartPicker] = useState(false);
+  const [showEndPicker, setShowEndPicker] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // データロード
-  const loadProjects = async () => {
-    try {
-      const data = await AsyncStorage.getItem(STORAGE_KEY);
-      setProjects(data ? JSON.parse(data) : []);
-    } catch (e) {
-      console.error('AsyncStorage load error', e);
-    }
-  };
-
+  // 初期ロード
   useEffect(() => {
-    loadProjects();
+    (async () => {
+      try {
+        const data = await AsyncStorage.getItem(STORAGE_KEY);
+        setProjects(data ? JSON.parse(data) : []);
+      } catch (e) {
+        console.error('AsyncStorage load error', e);
+      }
+    })();
   }, []);
 
-  // プロジェクト保存
+  // 保存
   const saveProjects = async (list) => {
     try {
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(list));
@@ -45,7 +49,7 @@ export default function ProjectRegisterScreen() {
     }
   };
 
-  // プロジェクト追加
+  // 追加処理
   const handleAdd = async () => {
     if (!name.trim()) {
       Alert.alert('入力エラー', 'プロジェクト名を入力してください');
@@ -66,58 +70,82 @@ export default function ProjectRegisterScreen() {
   };
 
   return (
-    <ScrollView contentContainerStyle={tw`flex-grow bg-gray-100 p-4`}>
-      <Text style={tw`text-xl font-bold mb-4`}>プロジェクト登録</Text>
+    <View style={tw`flex-1 flex-row bg-gray-100`}>      
+      {/* 左カラム：入力フォーム (60%) */}
+      <ScrollView style={{ width: width * 0.6, padding: 16 }}>
+        <Text style={tw`text-2xl font-bold mb-6`}>プロジェクト登録</Text>
 
-      <TextInput
-        style={tw`border border-gray-300 p-2 mb-4 rounded`}
-        placeholder="プロジェクト名"
-        value={name}
-        onChangeText={setName}
-      />
-
-      {/* 開始日 Picker 常時表示 */}
-      <View style={tw`bg-white p-4 rounded mb-4`}>        
-        <Text style={tw`mb-2`}>開始予定日</Text>
-        <DateTimePicker
-          value={startDate}
-          mode="date"
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={(e, d) => { if (d) setStartDate(d); }}
-          style={tw`w-full`}
+        <TextInput
+          style={tw`border border-gray-300 p-2 mb-4 rounded`}
+          placeholder="プロジェクト名"
+          value={name}
+          onChangeText={setName}
         />
-      </View>
 
-      {/* 終了日 Picker 常時表示 */}
-      <View style={tw`bg-white p-4 rounded mb-4`}>        
-        <Text style={tw`mb-2`}>終了予定日</Text>
-        <DateTimePicker
-          value={endDate}
-          mode="date"
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={(e, d) => { if (d) setEndDate(d); }}
-          style={tw`w-full`}
-        />
-      </View>
+        <Text style={tw`mb-2 font-semibold`}>開始予定日</Text>
+        <TouchableOpacity
+          style={tw`bg-white p-4 rounded mb-4 border border-gray-300`}
+          onPress={() => setShowStartPicker(true)}
+        >
+          <Text>{startDate.toLocaleDateString()}</Text>
+        </TouchableOpacity>
+        {showStartPicker && (
+          <DateTimePicker
+            value={startDate}
+            mode="date"
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            onChange={(event, selected) => {
+              setShowStartPicker(false);
+              if (selected) setStartDate(selected);
+            }}
+          />
+        )}
 
-      <Button
-        title={loading ? '追加中...' : '追加'}
-        onPress={handleAdd}
-        disabled={loading}
-      />
+        <Text style={tw`mb-2 font-semibold`}>終了予定日</Text>
+        <TouchableOpacity
+          style={tw`bg-white p-4 rounded mb-4 border border-gray-300`}
+          onPress={() => setShowEndPicker(true)}
+        >
+          <Text>{endDate.toLocaleDateString()}</Text>
+        </TouchableOpacity>
+        {showEndPicker && (
+          <DateTimePicker
+            value={endDate}
+            mode="date"
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            onChange={(event, selected) => {
+              setShowEndPicker(false);
+              if (selected) setEndDate(selected);
+            }}
+          />
+        )}
 
-      <Text style={tw`text-lg font-semibold mt-6 mb-2`}>登録プロジェクト一覧</Text>
-      {projects.length === 0 ? (
-        <Text style={tw`text-center text-gray-500`}>プロジェクトがありません</Text>
-      ) : (
-        projects.map((item, idx) => (
-          <View key={idx} style={tw`bg-white p-3 rounded mb-2`}>
-            <Text style={tw`font-bold`}>{item.name}</Text>
-            <Text>開始: {new Date(item.start).toLocaleDateString()}</Text>
-            <Text>終了: {new Date(item.end).toLocaleDateString()}</Text>
+        <View style={tw`items-center mt-4 mb-6`}>
+          <View style={{ width: '50%' }}>
+            <Button
+              title={loading ? '追加中...' : '追加'}
+              onPress={handleAdd}
+              disabled={loading}
+            />
           </View>
-        ))
-      )}
-    </ScrollView>
+        </View>
+      </ScrollView>
+
+      {/* 右カラム：登録プロジェクト一覧 (40%) */}
+      <ScrollView style={{ width: width * 0.4, padding: 16 }}>
+        <Text style={tw`text-2xl font-bold mb-4`}>登録プロジェクト一覧</Text>
+        {projects.length === 0 ? (
+          <Text style={tw`text-center text-gray-500`}>プロジェクトがありません</Text>
+        ) : (
+          projects.map((item, idx) => (
+            <View key={idx} style={tw`bg-white p-3 rounded mb-2`}>              
+              <Text style={tw`font-bold`}>{item.name}</Text>
+              <Text>開始: {new Date(item.start).toLocaleDateString()}</Text>
+              <Text>終了: {new Date(item.end).toLocaleDateString()}</Text>
+            </View>
+          ))
+        )}
+      </ScrollView>
+    </View>
   );
 }

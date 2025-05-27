@@ -1,11 +1,11 @@
-// App.js
-
+// App.js (project root, alongside DateContext.js)
 import 'react-native-gesture-handler';
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { DateProvider } from './DateContext';
 
 // Main Screens
 import HomeScreen from './screens/HomeScreen';
@@ -51,48 +51,57 @@ function ProfileStackScreen() {
 }
 
 export default function App() {
+  // TODO: Firebase Auth の状態管理
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  useEffect(() => {
+    // 認証サブスクライブ実装予定
+  }, []);
+
   return (
-    <NavigationContainer>
-      <Tab.Navigator
-        screenOptions={({ route }) => ({
-          tabBarIcon: ({ color, size }) => {
-            let iconName;
-            switch (route.name) {
-              case 'Home':
-                iconName = 'home-outline';
-                break;
-              case 'Attendance':
-                iconName = 'time-outline';
-                break;
-              case 'Materials':
-                iconName = 'cube-outline';
-                break;
-              case 'WIP':
-                iconName = 'construct-outline';
-                break;
-              case 'Billing':
-                iconName = 'document-text-outline';
-                break;
-              case 'Profile':
-                iconName = 'person-circle-outline';
-                break;
-              default:
-                iconName = 'ellipse-outline';
-            }
-            return <Ionicons name={iconName} size={size} color={color} />;
-          },
-          tabBarActiveTintColor: '#007AFF',
-          tabBarInactiveTintColor: 'gray',
-          headerShown: false,
-        })}
-      >
-        <Tab.Screen name="Home" component={HomeScreen} />
-        <Tab.Screen name="Attendance" component={AttendanceScreen} />
-        <Tab.Screen name="Materials" component={MaterialsScreen} />
-        <Tab.Screen name="WIP" component={WIPScreen} />
-        <Tab.Screen name="Billing" component={BillingScreen} />
-        <Tab.Screen name="Profile" component={ProfileStackScreen} />
-      </Tab.Navigator>
-    </NavigationContainer>
+    <DateProvider>
+      <NavigationContainer>
+        <Tab.Navigator
+          screenOptions={({ route }) => ({
+            tabBarIcon: ({ color, size }) => {
+              let iconName;
+              switch (route.name) {
+                case 'Home':
+                  iconName = 'home-outline';
+                  break;
+                case 'Attendance':
+                  iconName = 'time-outline';
+                  break;
+                case 'Materials':
+                  iconName = 'cube-outline';
+                  break;
+                case 'WIP':
+                  iconName = 'construct-outline';
+                  break;
+                case 'Billing':
+                  iconName = 'document-text-outline';
+                  break;
+                case 'Profile':
+                  iconName = 'person-circle-outline';
+                  break;
+                default:
+                  iconName = 'ellipse-outline';
+              }
+              return <Ionicons name={iconName} size={size} color={color} />;
+            },
+            tabBarActiveTintColor: '#007AFF',
+            tabBarInactiveTintColor: 'gray',
+            headerShown: false,
+          })}
+        >
+          <Tab.Screen name="Home" component={HomeScreen} />
+          <Tab.Screen name="Attendance" component={AttendanceScreen} />
+          <Tab.Screen name="Materials" component={MaterialsScreen} />
+          <Tab.Screen name="WIP" component={WIPScreen} />
+          <Tab.Screen name="Billing" component={BillingScreen} />
+          <Tab.Screen name="Profile" component={ProfileStackScreen} />
+        </Tab.Navigator>
+      </NavigationContainer>
+    </DateProvider>
   );
 }
