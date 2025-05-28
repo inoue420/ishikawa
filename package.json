@@ -25,7 +25,10 @@
     "react-native-safe-area-context": "5.4.0",
     "react-native-screens": "~4.10.0",
     "twrnc": "^4.7.0",
-    "@react-native-community/datetimepicker": "8.3.0"
+    "@react-native-community/datetimepicker": "8.3.0",
+    "expo-print": "~14.1.4",
+    "expo-sharing": "~13.1.5",
+    "expo-file-system": "~18.1.10"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0"
