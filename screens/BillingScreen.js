@@ -10,12 +10,14 @@ import {
   TouchableOpacity,
   Dimensions,
   Platform,
+  Modal,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import tw from 'twrnc';
+import { WebView } from 'react-native-webview';
 import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
+import tw from 'twrnc';
 
 const { width } = Dimensions.get('window');
 const USER_KEY = '@user_list';
@@ -23,6 +25,7 @@ const PROJECT_KEY = '@project_list';
 const ATT_KEY = '@attendance_records';
 const MAT_REC_KEY = '@materials_records';
 const MAT_LIST_KEY = '@materials_list';
+const COMPANY_KEY = '@company_profile';
 
 export default function BillingScreen() {
   const [startDate, setStartDate] = useState(new Date());
@@ -31,14 +34,14 @@ export default function BillingScreen() {
   const [showEndPicker, setShowEndPicker] = useState(false);
   const [invoiceLines, setInvoiceLines] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [previewHTML, setPreviewHTML] = useState('');
+  const [modalVisible, setModalVisible] = useState(false);
 
-  // format helpers
   const formatISO = d => d.toISOString().slice(0,10);
-  const formatDate = d => d.toLocaleDateString();
   const diffDays = (d1, d2) => Math.floor((d2 - d1)/(1000*3600*24)) + 1;
 
-  // build HTML template
-  const makeInvoiceHTML = (lines, periodStart, periodEnd, invoiceNo, issueDate, clientName) => {
+  const makeInvoiceHTML = ({ lines, periodStart, periodEnd, invoiceNo, issueDate, clientName, companyInfo }) => {
+    const { bankName, branchName, accountType, accountNumber } = companyInfo;
     const rows = lines.map(l => `
       <tr>
         <td>${l.project}</td>
@@ -60,7 +63,6 @@ export default function BillingScreen() {
           header { text-align: center; margin-bottom: 40px; }
           .company { font-size: 18px; font-weight: bold; }
           .meta { margin-bottom: 20px; }
-          .meta div { margin-bottom: 4px; }
           table { width: 100%; border-collapse: collapse; margin-top: 20px; }
           th, td { border: 1px solid #333; padding: 8px; text-align: center; }
           th { background: #f0f0f0; }
@@ -70,18 +72,16 @@ export default function BillingScreen() {
       </head>
       <body>
         <header>
-          <div class="company">YOUR COMPANY NAME</div>
-          <div>〒123-4567 東京都〇〇区△△町1-2-3</div>
-          <div>TEL: 03-1234-5678</div>
+          <div class="company">株式会社　石川組</div>
+          <div>〒939-1363 富山県砺波市太郎丸6568-1</div>
+          <div>TEL: 0763-77-3185</div>
         </header>
-
         <section class="meta">
           <div>請求書番号：${invoiceNo}</div>
           <div>発行日：${issueDate}</div>
           <div>請求先：${clientName}</div>
           <div>請求期間：${periodStart} ～ ${periodEnd}</div>
         </section>
-
         <table>
           <thead>
             <tr>
@@ -96,20 +96,15 @@ export default function BillingScreen() {
             ${rows}
           </tbody>
         </table>
-
         <div class="total">総合計：¥${totalAll.toLocaleString()}</div>
-
         <footer>
-          上記の通り、ご請求申し上げます。<br>
-          振込先：〇〇銀行 渋谷支店 普通 1234567<br>
-          ご不明点は担当までお問い合わせください。
+          <div>振込先：${bankName} ${branchName} ${accountType} ${accountNumber}</div>
         </footer>
       </body>
     </html>
     `;
   };
 
-  // aggregate data
   const loadAndCompute = async () => {
     setLoading(true);
     try {
@@ -119,10 +114,10 @@ export default function BillingScreen() {
       const mats = JSON.parse(await AsyncStorage.getItem(MAT_REC_KEY) || '[]');
       const matList = JSON.parse(await AsyncStorage.getItem(MAT_LIST_KEY) || '[]');
       const linesMap = {};
-      projects.forEach(p => { linesMap[p.name] = { project: p.name, workHours:0, laborCost:0, materialCost:0, total:0 } });
+      projects.forEach(p => linesMap[p.name] = { project: p.name, workHours:0, laborCost:0, materialCost:0, total:0 });
       atts.forEach(rec => {
         const d = new Date(rec.date);
-        if (d>=startDate && d<=endDate) {
+        if (d >= startDate && d <= endDate) {
           const line = linesMap[rec.project]; if (!line) return;
           const hrs = (rec.users?.length||0)*8;
           const cost = (rec.users||[]).reduce((s,u)=>{ const uobj=users.find(x=>x.name===u); return s+(uobj?.wage||0)*8; },0);
@@ -132,59 +127,103 @@ export default function BillingScreen() {
       mats.forEach(rec=>{
         const s=new Date(rec.lendStart), e=rec.lendEnd?new Date(rec.lendEnd):endDate;
         if (s<=endDate && e>=startDate) {
-          const line=linesMap[rec.project]; if(!line) return;
-          const st=s<startDate?startDate:s, ed=e> endDate?endDate:e;
-          const days=diffDays(st,ed);
-          (rec.items||[]).forEach(it=>{ const m=matList.find(x=>x.name===it); line.materialCost+= (m?.unitPrice||0)*days; });
+          const line = linesMap[rec.project]; if(!line) return;
+          const st = s<startDate?startDate:s, ed = e>endDate?endDate:e;
+          const days = diffDays(st,ed);
+          (rec.items||[]).forEach(it=>{ const m=matList.find(x=>x.name===it); line.materialCost+=(m?.unitPrice||0)*days; });
         }
       });
       const results = Object.values(linesMap).map(l=>({ ...l, total:l.laborCost+l.materialCost })).filter(l=>l.total>0);
       setInvoiceLines(results);
-    } catch(e){ console.error(e); Alert.alert('エラー','集計失敗'); }
-    finally{ setLoading(false); }
+    } catch(e) { console.error(e); Alert.alert('エラー','集計失敗'); }
+    finally { setLoading(false); }
   };
 
   useEffect(() => { loadAndCompute(); }, [startDate,endDate]);
 
-  // PDF generation
-  const generateAndSharePDF = async () => {
-    if (invoiceLines.length===0) return Alert.alert('エラー','請求明細がありません');
+  const handlePreview = async () => {
+    if (invoiceLines.length === 0) return Alert.alert('エラー','明細がありません');
+    const projList = JSON.parse(await AsyncStorage.getItem(PROJECT_KEY) || '[]');
+    const firstProj = projList.find(p => p.name === invoiceLines[0].project);
+    const clientName = firstProj?.clientName || '';
+    const comp = JSON.parse(await AsyncStorage.getItem(COMPANY_KEY) || '{}');
     const invoiceNo = `INV-${Date.now()}`;
     const issueDate = formatISO(new Date());
-    const clientName = ''; // TODO: invoice client name input
-    const html = makeInvoiceHTML(invoiceLines, formatISO(startDate), formatISO(endDate), invoiceNo, issueDate, clientName);
+    const html = makeInvoiceHTML({
+      lines: invoiceLines,
+      periodStart: formatISO(startDate),
+      periodEnd: formatISO(endDate),
+      invoiceNo,
+      issueDate,
+      clientName,
+      companyInfo: comp
+    });
+    setPreviewHTML(html);
+    setModalVisible(true);
+  };
+
+  const handleSavePDF = async () => {
     try {
-      const { uri } = await Print.printToFileAsync({ html });
-      await Sharing.shareAsync(uri);
+      const { uri } = await Print.printToFileAsync({ html: previewHTML });
+      const filename = FileSystem.documentDirectory + `invoice-${Date.now()}.pdf`;
+      await FileSystem.moveAsync({ from: uri, to: filename });
+      Alert.alert('保存完了', `保存先: ${filename}`);
+      setModalVisible(false);
     } catch (e) {
       console.error(e);
-      Alert.alert('エラー','PDF生成／共有に失敗しました');
+      Alert.alert('エラー','保存に失敗しました');
     }
   };
 
   return (
-    <View style={tw`flex-1 flex-row bg-gray-100`}>
-      {/* Left column */}
-      <ScrollView style={{ width: width * 0.6, padding: 16 }}>
-        <Text style={tw`text-2xl font-bold mb-4`}>請求期間設定</Text>
-        <Text style={tw`mb-2`}>開始日</Text>
-        <TouchableOpacity style={tw`bg-white p-4 rounded mb-4 border border-gray-300`} onPress={()=>setShowStartPicker(true)}>
-          <Text>{formatISO(startDate)}</Text>
-        </TouchableOpacity>
-        {showStartPicker && (<DateTimePicker value={startDate} mode="date" display={Platform.OS==='ios'?'spinner':'default'} onChange={(_,d)=>{setShowStartPicker(false); if(d) setStartDate(d);}} />)}
-        <Text style={tw`mb-2`}>終了日</Text>
-        <TouchableOpacity style={tw`bg-white p-4 rounded mb-4 border border-gray-300`} onPress={()=>setShowEndPicker(true)}>
-          <Text>{formatISO(endDate)}</Text>
-        </TouchableOpacity>
-        {showEndPicker && (<DateTimePicker value={endDate} mode="date" display={Platform.OS==='ios'?'spinner':'default'} onChange={(_,d)=>{setShowEndPicker(false); if(d) setEndDate(d);}} />)}
-        <View style={tw`items-center mb-4`}><View style={{width:'50%'}}><Button title={loading?'集計中...':'集計'} onPress={loadAndCompute} disabled={loading}/></View></View>
-        <View style={tw`items-center mb-6`}><View style={{width:'50%'}}><Button title="請求書発行" onPress={generateAndSharePDF} /></View></View>
+    <View style={tw`flex-1 bg-gray-100`}>
+      <ScrollView contentContainerStyle={tw`p-4`}>
+        <View style={tw`flex-row justify-between mb-4`}>
+          <TouchableOpacity style={tw`bg-white p-4 rounded border border-gray-300 flex-1 mr-2`} onPress={()=>setShowStartPicker(true)}>
+            <Text>開始日: {formatISO(startDate)}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={tw`bg-white p-4 rounded border border-gray-300 flex-1`} onPress={()=>setShowEndPicker(true)}>
+            <Text>終了日: {formatISO(endDate)}</Text>
+          </TouchableOpacity>
+        </View>
+        {showStartPicker && <DateTimePicker value={startDate} mode="date" display={Platform.OS==='ios'?'spinner':'default'} onChange={(_,d)=>{setShowStartPicker(false); if(d) setStartDate(d);}} />}
+        {showEndPicker && <DateTimePicker value={endDate} mode="date" display={Platform.OS==='ios'?'spinner':'default'} onChange={(_,d)=>{setShowEndPicker(false); if(d) setEndDate(d);}} />}
+        <View style={tw`flex-row justify-around mb-6`}>
+          <View style={{ width: '40%' }}><Button title={loading?'集計中...':'集計'} onPress={loadAndCompute} disabled={loading}/></View>
+          <View style={{ width: '40%' }}><Button title="プレビュー" onPress={handlePreview} /></View>
+        </View>
+        <Text style={tw`text-xl font-bold mb-2`}>請求明細</Text>
+        {invoiceLines.length===0 ? (
+          <Text style={tw`text-center text-gray-500`}>集計データがありません</Text>
+        ) : (
+          invoiceLines.map((line,idx)=>(
+            <View key={idx} style={tw`bg-white p-3 rounded mb-2`}>
+              <Text style={tw`font-semibold mb-1`}>{line.project}</Text>
+              <Text>労働時間: {line.workHours}h</Text>
+              <Text>人件費: ¥{line.laborCost}</Text>
+              <Text>資材費: ¥{line.materialCost}</Text>
+              <Text style={tw`font-bold mt-1`}>合計: ¥{line.total}</Text>
+            </View>
+          ))
+        )}
       </ScrollView>
-      {/* Right column */}
-      <ScrollView style={{ width: width * 0.4, padding: 16 }}>
-        <Text style={tw`text-2xl font-bold mb-4`}>請求明細</Text>
-        {invoiceLines.length===0 ? <Text style={tw`text-center text-gray-500`}>集計データがありません</Text> : invoiceLines.map((line,idx)=>(<View key={idx} style={tw`bg-white p-3 rounded mb-2`}><Text style={tw`font-semibold mb-1`}>{line.project}</Text><Text>労働時間: {line.workHours}h</Text><Text>人件費: ¥{line.laborCost}</Text><Text>資材費: ¥{line.materialCost}</Text><Text style={tw`font-bold mt-1`}>合計: ¥{line.total}</Text></View>))}
-      </ScrollView>
+      <Modal visible={modalVisible} transparent={false} animationType="slide">
+        <View style={{ flex: 1 }}>
+          <WebView
+            originWhitelist={['*']}
+            source={{ html: previewHTML }}
+            style={{ flex: 1 }}
+          />
+          <View style={tw`flex-row justify-around p-4 bg-white`}>   
+            <View style={{ width: '45%' }}>
+              <Button title="保存PDF" onPress={handleSavePDF} />
+            </View>
+            <View style={{ width: '45%' }}>
+              <Button title="閉じる" onPress={()=>setModalVisible(false)} />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
