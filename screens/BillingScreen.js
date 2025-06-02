@@ -1,5 +1,3 @@
-// screens/BillingScreen.js
-
 import React, { useEffect, useState } from 'react';
 import {
   View,
@@ -41,7 +39,7 @@ export default function BillingScreen() {
   const diffDays = (d1, d2) => Math.floor((d2 - d1)/(1000*3600*24)) + 1;
 
   const makeInvoiceHTML = ({ lines, periodStart, periodEnd, invoiceNo, issueDate, clientName, companyInfo }) => {
-    const { bankName, branchName, accountType, accountNumber } = companyInfo;
+    const { bankName, branchName, accountType, accountNumber, companyName } = companyInfo;
     const rows = lines.map(l => `
       <tr>
         <td>${l.project}</td>
@@ -60,8 +58,9 @@ export default function BillingScreen() {
         <title>請求書</title>
         <style>
           body { font-family: sans-serif; padding: 40px; }
-          header { text-align: center; margin-bottom: 40px; }
-          .company { font-size: 18px; font-weight: bold; }
+          header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; }
+          .title { font-size: 24px; font-weight: bold; }
+          .company { font-size: 14px; text-align: right; }
           .meta { margin-bottom: 20px; }
           table { width: 100%; border-collapse: collapse; margin-top: 20px; }
           th, td { border: 1px solid #333; padding: 8px; text-align: center; }
@@ -72,9 +71,12 @@ export default function BillingScreen() {
       </head>
       <body>
         <header>
-          <div class="company">株式会社　石川組</div>
-          <div>〒939-1363 富山県砺波市太郎丸6568-1</div>
-          <div>TEL: 0763-77-3185</div>
+          <div class="title">請求書</div>
+          <div class="company">
+            ${companyName}<br/>
+            〒939-1363 富山県砺波市太郎丸6568-1<br/>
+            TEL: 0763-77-3185
+          </div>
         </header>
         <section class="meta">
           <div>請求書番号：${invoiceNo}</div>
@@ -141,16 +143,15 @@ export default function BillingScreen() {
 
   useEffect(() => { loadAndCompute(); }, [startDate,endDate]);
 
-  const handlePreview = async () => {
-    if (invoiceLines.length === 0) return Alert.alert('エラー','明細がありません');
+  const handleProjectInvoice = async (projectLine) => {
     const projList = JSON.parse(await AsyncStorage.getItem(PROJECT_KEY) || '[]');
-    const firstProj = projList.find(p => p.name === invoiceLines[0].project);
-    const clientName = firstProj?.clientName || '';
+    const proj = projList.find(p => p.name === projectLine.project);
+    const clientName = proj?.clientName || '';
     const comp = JSON.parse(await AsyncStorage.getItem(COMPANY_KEY) || '{}');
     const invoiceNo = `INV-${Date.now()}`;
     const issueDate = formatISO(new Date());
     const html = makeInvoiceHTML({
-      lines: invoiceLines,
+      lines: [projectLine],
       periodStart: formatISO(startDate),
       periodEnd: formatISO(endDate),
       invoiceNo,
@@ -188,39 +189,33 @@ export default function BillingScreen() {
         </View>
         {showStartPicker && <DateTimePicker value={startDate} mode="date" display={Platform.OS==='ios'?'spinner':'default'} onChange={(_,d)=>{setShowStartPicker(false); if(d) setStartDate(d);}} />}
         {showEndPicker && <DateTimePicker value={endDate} mode="date" display={Platform.OS==='ios'?'spinner':'default'} onChange={(_,d)=>{setShowEndPicker(false); if(d) setEndDate(d);}} />}
-        <View style={tw`flex-row justify-around mb-6`}>
-          <View style={{ width: '40%' }}><Button title={loading?'集計中...':'集計'} onPress={loadAndCompute} disabled={loading}/></View>
-          <View style={{ width: '40%' }}><Button title="プレビュー" onPress={handlePreview} /></View>
+        <View style={tw`flex-row justify-around mb-6`}>   
+          <View style={{ width: '40%' }}><Button title={loading?'集計中...':'集計'} onPress={loadAndCompute} disabled={loading} /></View>
+          <View style={{ width: '40%' }}><Button title="プレビュー" onPress={() => invoiceLines.length && handleProjectInvoice(invoiceLines[0])} /></View>
         </View>
         <Text style={tw`text-xl font-bold mb-2`}>請求明細</Text>
         {invoiceLines.length===0 ? (
           <Text style={tw`text-center text-gray-500`}>集計データがありません</Text>
         ) : (
           invoiceLines.map((line,idx)=>(
-            <View key={idx} style={tw`bg-white p-3 rounded mb-2`}>
-              <Text style={tw`font-semibold mb-1`}>{line.project}</Text>
-              <Text>労働時間: {line.workHours}h</Text>
-              <Text>人件費: ¥{line.laborCost}</Text>
-              <Text>資材費: ¥{line.materialCost}</Text>
-              <Text style={tw`font-bold mt-1`}>合計: ¥{line.total}</Text>
-            </View>
+            <TouchableOpacity key={idx} onPress={() => handleProjectInvoice(line)}>
+              <View style={tw`bg-white p-3 rounded mb-2`}>
+                <Text style={tw`font-semibold mb-1`}>{line.project}</Text>
+                <Text>労働時間: {line.workHours}h</Text>
+                <Text>人件費: ¥{line.laborCost.toLocaleString()}</Text>
+                <Text>資材費: ¥{line.materialCost.toLocaleString()}</Text>
+                <Text style={tw`font-bold mt-1`}>合計: ¥{line.total.toLocaleString()}</Text>
+              </View>
+            </TouchableOpacity>
           ))
         )}
       </ScrollView>
       <Modal visible={modalVisible} transparent={false} animationType="slide">
         <View style={{ flex: 1 }}>
-          <WebView
-            originWhitelist={['*']}
-            source={{ html: previewHTML }}
-            style={{ flex: 1 }}
-          />
+          <WebView originWhitelist={["*"]} source={{ html: previewHTML }} style={{ flex: 1 }} />
           <View style={tw`flex-row justify-around p-4 bg-white`}>   
-            <View style={{ width: '45%' }}>
-              <Button title="保存PDF" onPress={handleSavePDF} />
-            </View>
-            <View style={{ width: '45%' }}>
-              <Button title="閉じる" onPress={()=>setModalVisible(false)} />
-            </View>
+            <View style={{ width: '45%' }}><Button title="保存PDF" onPress={handleSavePDF} /></View>
+            <View style={{ width: '45%' }}><Button title="閉じる" onPress={()=>setModalVisible(false)} /></View>
           </View>
         </View>
       </Modal>

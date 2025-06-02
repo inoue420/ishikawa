@@ -1,5 +1,3 @@
-// screens/ProfileScreen.js
-
 import React, { useEffect, useState } from 'react';
 import {
   View,
@@ -9,6 +7,7 @@ import {
   Alert,
   ScrollView,
   Dimensions,
+  StyleSheet
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import tw from 'twrnc';
@@ -65,90 +64,69 @@ export default function ProfileScreen({ navigation }) {
   return (
     <View style={tw`flex-1 flex-row bg-gray-100`}>
       {/* Left column: navigation */}
-      <ScrollView style={{ width: width * 0.6, padding: 16 }}>
-        <Text style={tw`text-2xl font-bold mb-6`}>メニュー</Text>
-        <View style={tw`mb-4`}>
-          <Button
-            title="ユーザー登録"
-            onPress={() => navigation.navigate('UserRegister')}
-          />
+      <ScrollView style={styles.leftColumn} contentContainerStyle={styles.leftContainer}>
+        <Text style={styles.menuTitle}>メニュー</Text>
+        <View style={styles.buttonWrapper}>
+          <Button title="ユーザー登録" onPress={() => navigation.navigate('UserRegister')} />
         </View>
-        <View style={tw`mb-4`}>
-          <Button
-            title="資材登録"
-            onPress={() => navigation.navigate('MaterialRegister')}
-          />
+        <View style={styles.buttonWrapper}>
+          <Button title="資材登録" onPress={() => navigation.navigate('MaterialRegister')} />
         </View>
-        <View style={tw`mb-4`}>
-          <Button
-            title="プロジェクト登録"
-            onPress={() => navigation.navigate('ProjectRegister')}
-          />
+        <View style={styles.buttonWrapper}>
+          <Button title="プロジェクト登録" onPress={() => navigation.navigate('ProjectRegister')} />
         </View>
-        <View>
-          <Button
-            title="ログアウト"
-            color="red"
-            onPress={handleLogout}
-          />
+        <View style={styles.buttonWrapper}>
+          <Button title="CSV出力設定へ" onPress={() => navigation.navigate('ExportSettings')} />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button title="ログアウト" color="red" onPress={handleLogout} />
         </View>
       </ScrollView>
 
       {/* Right column: company info */}
-      <ScrollView style={{ width: width * 0.4, padding: 16 }}>
-        <Text style={tw`text-2xl font-bold mb-6`}>会社情報設定</Text>
+      <ScrollView style={styles.rightColumn} contentContainerStyle={styles.rightContainer}>
+        <View>
+          <Text style={styles.sectionTitle}>会社情報設定</Text>
 
-        <Text style={tw`mb-2`}>会社名</Text>
-        <TextInput
-          style={tw`border border-gray-300 p-2 mb-4 rounded`}
-          placeholder="会社名を入力"
-          value={companyName}
-          onChangeText={setCompanyName}
-        />
+          <Text style={styles.label}>会社名</Text>
+          <TextInput style={styles.input} placeholder="会社名を入力" value={companyName} onChangeText={setCompanyName} />
 
-        <Text style={tw`mb-2`}>銀行名</Text>
-        <TextInput
-          style={tw`border border-gray-300 p-2 mb-4 rounded`}
-          placeholder="銀行名を入力"
-          value={bankName}
-          onChangeText={setBankName}
-        />
+          <Text style={styles.label}>銀行名</Text>
+          <TextInput style={styles.input} placeholder="銀行名を入力" value={bankName} onChangeText={setBankName} />
 
-        <Text style={tw`mb-2`}>支店名</Text>
-        <TextInput
-          style={tw`border border-gray-300 p-2 mb-4 rounded`}
-          placeholder="支店名を入力"
-          value={branchName}
-          onChangeText={setBranchName}
-        />
+          <Text style={styles.label}>支店名</Text>
+          <TextInput style={styles.input} placeholder="支店名を入力" value={branchName} onChangeText={setBranchName} />
 
-        <Text style={tw`mb-2`}>口座種別</Text>
-        <TextInput
-          style={tw`border border-gray-300 p-2 mb-4 rounded`}
-          placeholder="普通 / 当座"
-          value={accountType}
-          onChangeText={setAccountType}
-        />
+          <Text style={styles.label}>口座種別</Text>
+          <TextInput style={styles.input} placeholder="普通 / 当座" value={accountType} onChangeText={setAccountType} />
 
-        <Text style={tw`mb-2`}>口座番号</Text>
-        <TextInput
-          style={tw`border border-gray-300 p-2 mb-6 rounded`}
-          placeholder="口座番号を入力"
-          keyboardType="numeric"
-          value={accountNumber}
-          onChangeText={setAccountNumber}
-        />
+          <Text style={styles.label}>口座番号</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="口座番号を入力"
+            keyboardType="numeric"
+            value={accountNumber}
+            onChangeText={setAccountNumber}
+          />
+        </View>
 
-        <View style={tw`items-center`}>         
-          <View style={{ width: '60%' }}>
-            <Button
-              title={loading ? '保存中...' : '保存'}
-              onPress={handleSave}
-              disabled={loading}
-            />
-          </View>
+        <View style={styles.saveButtonWrapper}>
+          <Button title={loading ? '保存中...' : '保存'} onPress={handleSave} disabled={loading} />
         </View>
       </ScrollView>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  leftColumn: { width: width * 0.6, backgroundColor: '#f7f7f7' },
+  leftContainer: { padding: 16 },
+  menuTitle: { ...tw`text-2xl font-bold mb-6` },
+  buttonWrapper: { width: width * 0.33, marginBottom: 16 },
+  rightColumn: { width: width * 0.4 },
+  rightContainer: { flexGrow: 1, padding: 16, justifyContent: 'space-between' },
+  sectionTitle: { ...tw`text-2xl font-bold mb-6` },
+  label: { ...tw`mb-2` },
+  input: { ...tw`border border-gray-300 p-2 mb-4 rounded` },
+  saveButtonWrapper: { alignItems: 'center', marginBottom: 20 }
+});

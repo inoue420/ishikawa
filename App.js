@@ -1,4 +1,3 @@
-// App.js (project root, alongside DateContext.js)
 import 'react-native-gesture-handler';
 import React, { useState, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
@@ -19,6 +18,7 @@ import ProfileScreen from './screens/ProfileScreen';
 import UserRegisterScreen from './screens/UserRegisterScreen';
 import MaterialRegisterScreen from './screens/MaterialRegisterScreen';
 import ProjectRegisterScreen from './screens/ProjectRegisterScreen';
+import ExportSettingsScreen from './screens/ExportSettingsScreen'; // 追加
 
 const Tab = createBottomTabNavigator();
 const ProfileStack = createStackNavigator();
@@ -46,16 +46,20 @@ function ProfileStackScreen() {
         component={ProjectRegisterScreen}
         options={{ title: 'プロジェクト登録' }}
       />
+      <ProfileStack.Screen
+        name="ExportSettings"
+        component={ExportSettingsScreen}
+        options={{ title: 'CSV出力設定' }}
+      />
     </ProfileStack.Navigator>
   );
 }
 
 export default function App() {
-  // TODO: Firebase Auth の状態管理
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   useEffect(() => {
-    // 認証サブスクライブ実装予定
+    // TODO: Firebase Auth の状態管理
   }, []);
 
   return (
