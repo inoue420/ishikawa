@@ -1,3 +1,5 @@
+// screens/ProfileScreen.js
+
 import React, { useEffect, useState } from 'react';
 import {
   View,
@@ -7,13 +9,17 @@ import {
   Alert,
   ScrollView,
   Dimensions,
-  StyleSheet
+  StyleSheet,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import tw from 'twrnc';
 
+// Firestore service 関数をインポート
+import {
+  fetchCompanyProfile,
+  setCompanyProfile,
+} from '../firestoreService';
+
 const { width } = Dimensions.get('window');
-const STORAGE_KEY = '@company_profile';
 
 export default function ProfileScreen({ navigation }) {
   const [companyName, setCompanyName] = useState('');
@@ -23,34 +29,39 @@ export default function ProfileScreen({ navigation }) {
   const [accountNumber, setAccountNumber] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Firestore から既存の会社情報を読み込む
   useEffect(() => {
     (async () => {
       try {
-        const json = await AsyncStorage.getItem(STORAGE_KEY);
-        if (json) {
-          const data = JSON.parse(json);
-          setCompanyName(data.companyName || '');
-          setBankName(data.bankName || '');
-          setBranchName(data.branchName || '');
-          setAccountType(data.accountType || '');
-          setAccountNumber(data.accountNumber || '');
+        const comp = await fetchCompanyProfile();
+        if (comp) {
+          setCompanyName(comp.companyName || '');
+          setBankName(comp.bankName || '');
+          setBranchName(comp.branchName || '');
+          setAccountType(comp.accountType || '');
+          setAccountNumber(comp.accountNumber || '');
         }
       } catch (e) {
-        console.error('AsyncStorage load error', e);
+        console.error('Firestore load error', e);
+        Alert.alert('エラー', '会社情報の読み込みに失敗しました');
       }
     })();
   }, []);
 
+  // Firestore に会社情報を保存／更新
   const handleSave = async () => {
     setLoading(true);
     try {
-      await AsyncStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({ companyName, bankName, branchName, accountType, accountNumber })
-      );
+      await setCompanyProfile({
+        companyName,
+        bankName,
+        branchName,
+        accountType,
+        accountNumber,
+      });
       Alert.alert('成功', '会社情報を保存しました');
     } catch (e) {
-      console.error('AsyncStorage save error', e);
+      console.error('Firestore save error', e);
       Alert.alert('エラー', '保存に失敗しました');
     } finally {
       setLoading(false);
@@ -89,16 +100,36 @@ export default function ProfileScreen({ navigation }) {
           <Text style={styles.sectionTitle}>会社情報設定</Text>
 
           <Text style={styles.label}>会社名</Text>
-          <TextInput style={styles.input} placeholder="会社名を入力" value={companyName} onChangeText={setCompanyName} />
+          <TextInput
+            style={styles.input}
+            placeholder="会社名を入力"
+            value={companyName}
+            onChangeText={setCompanyName}
+          />
 
           <Text style={styles.label}>銀行名</Text>
-          <TextInput style={styles.input} placeholder="銀行名を入力" value={bankName} onChangeText={setBankName} />
+          <TextInput
+            style={styles.input}
+            placeholder="銀行名を入力"
+            value={bankName}
+            onChangeText={setBankName}
+          />
 
           <Text style={styles.label}>支店名</Text>
-          <TextInput style={styles.input} placeholder="支店名を入力" value={branchName} onChangeText={setBranchName} />
+          <TextInput
+            style={styles.input}
+            placeholder="支店名を入力"
+            value={branchName}
+            onChangeText={setBranchName}
+          />
 
           <Text style={styles.label}>口座種別</Text>
-          <TextInput style={styles.input} placeholder="普通 / 当座" value={accountType} onChangeText={setAccountType} />
+          <TextInput
+            style={styles.input}
+            placeholder="普通 / 当座"
+            value={accountType}
+            onChangeText={setAccountType}
+          />
 
           <Text style={styles.label}>口座番号</Text>
           <TextInput
@@ -128,5 +159,5 @@ const styles = StyleSheet.create({
   sectionTitle: { ...tw`text-2xl font-bold mb-6` },
   label: { ...tw`mb-2` },
   input: { ...tw`border border-gray-300 p-2 mb-4 rounded` },
-  saveButtonWrapper: { alignItems: 'center', marginBottom: 20 }
+  saveButtonWrapper: { alignItems: 'center', marginBottom: 20 },
 });

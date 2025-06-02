@@ -1,15 +1,19 @@
 // firebaseConfig.js
-import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { initializeApp } from "firebase/app";
+import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_AUTH_DOMAIN",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_STORAGE_BUCKET",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyDn61Whz74PRXbCKMY2r1FqHmoMfZz8idA",
+  authDomain: "ishikawa-73dd6.firebaseapp.com",
+  projectId: "ishikawa-73dd6",
+  storageBucket: "ishikawa-73dd6.appspot.com",
+  messagingSenderId: "605825857189",
+  appId: "1:605825857189:web:4961007a489ca0ffc6ff4c",
+  measurementId: "G-DL7V0BNQM9"
 };
 
+// Firebase を初期化
 const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
+
+// Firestore インスタンス
+export const db = getFirestore(app);
