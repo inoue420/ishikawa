@@ -1,5 +1,4 @@
 // screens/MaterialsScreen.js
-
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
@@ -10,16 +9,21 @@ import {
   Dimensions,
   TouchableOpacity,
   Platform,
+  RefreshControl,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useFocusEffect } from '@react-navigation/native';
 import tw from 'twrnc';
+import {
+  fetchMaterialsList,
+  fetchProjects,
+  fetchMaterialsRecords,
+  addMaterialRecord,
+  deleteMaterialRecord,
+  updateMaterialRecord,
+} from '../firestoreService';
 
 const { width } = Dimensions.get('window');
-const ITEM_KEY = '@materials_list';
-const PROJECT_KEY = '@project_list';
-const RECORD_KEY = '@materials_records';
 
 export default function MaterialsScreen() {
   // Data state
@@ -34,46 +38,53 @@ export default function MaterialsScreen() {
   const [showStartPicker, setShowStartPicker] = useState(false);
 
   // Editing state
-  const [editingIndex, setEditingIndex] = useState(-1);
+  const [editingId, setEditingId] = useState(null);
   const [editStart, setEditStart] = useState(new Date());
   const [editEnd, setEditEnd] = useState(new Date());
   const [showEditStartPicker, setShowEditStartPicker] = useState(false);
   const [showEditEndPicker, setShowEditEndPicker] = useState(false);
 
   const [loading, setLoading] = useState(false);
-  const dateFmt = d => d.toLocaleDateString();
+  const [refreshing, setRefreshing] = useState(false);
 
-  // Load data
-  const loadData = async () => {
+  const dateFmt = (d) => d.toLocaleDateString();
+
+  // Load data from Firestore
+  const loadData = useCallback(async () => {
     try {
-      const it = await AsyncStorage.getItem(ITEM_KEY);
-      setItems(it ? JSON.parse(it) : []);
-      const pr = await AsyncStorage.getItem(PROJECT_KEY);
-      setProjects(pr ? JSON.parse(pr) : []);
-      const rc = await AsyncStorage.getItem(RECORD_KEY);
-      setRecords(rc ? JSON.parse(rc) : []);
+      const [it, pr, rc] = await Promise.all([
+        fetchMaterialsList(),
+        fetchProjects(),
+        fetchMaterialsRecords(),
+      ]);
+      setItems(it);
+      setProjects(pr);
+      // Convert Firestore Timestamps to JS Date strings
+      const formatted = rc.map((rec) => ({
+        id: rec.id,
+        project: rec.project,
+        items: rec.items,
+        lendStart: rec.lendStart.toDate(),
+        lendEnd: rec.lendEnd ? rec.lendEnd.toDate() : null,
+        timestamp: rec.timestamp.toDate(),
+      }));
+      setRecords(formatted);
     } catch (e) {
       console.error(e);
+      Alert.alert('エラー', 'データの読み込みに失敗しました');
     }
-  };
-  useEffect(() => { loadData(); }, []);
-  useFocusEffect(useCallback(() => { loadData(); }, []));
+  }, []);
 
-  // Persist records
-  const saveRecords = async list => {
-    try {
-      await AsyncStorage.setItem(RECORD_KEY, JSON.stringify(list));
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  // Find active items (no lendEnd)
-  const activeItems = new Set(
-    records.filter(r => !r.lendEnd).flatMap(r => r.items)
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
   );
 
-  // Record multiple items lend
+  // Persist new record
   const handleRecord = async () => {
     if (!selectedProject) {
       return Alert.alert('入力エラー', 'プロジェクトを選択してください');
@@ -81,75 +92,97 @@ export default function MaterialsScreen() {
     if (selectedItems.length === 0) {
       return Alert.alert('入力エラー', '資材を選択してください');
     }
-    const conflict = selectedItems.find(it => activeItems.has(it));
+    // Check conflicts: items already active (lendEnd null)
+    const activeIds = new Set(records.filter((r) => !r.lendEnd).flatMap((r) => r.items));
+    const conflict = selectedItems.find((it) => activeIds.has(it));
     if (conflict) {
       return Alert.alert('エラー', `${conflict} は既に貸出中です`);
     }
 
     setLoading(true);
-    const newRec = {
-      items: selectedItems,
-      project: selectedProject,
-      lendStart: lendStart.toISOString(),
-      lendEnd: '',
-      timestamp: new Date().toISOString(),
-    };
-    const updated = [newRec, ...records];
-    setRecords(updated);
-    await saveRecords(updated);
-    setSelectedItems([]);
-    setLoading(false);
+    try {
+      await addMaterialRecord({
+        project: selectedProject,
+        lendStart,
+        lendEnd: null,
+        items: selectedItems,
+        timestamp: new Date(),
+      });
+      setSelectedItems([]);
+      loadData();
+    } catch (e) {
+      console.error(e);
+      Alert.alert('エラー', '貸出記録の作成に失敗しました');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Update record start and end
-  const handleUpdateRecord = async idx => {
-    const updated = records.map((rec, i) =>
-      i === idx
-        ? { ...rec, lendStart: editStart.toISOString(), lendEnd: editEnd.toISOString() }
-        : rec
-    );
-    setRecords(updated);
-    await saveRecords(updated);
-    setEditingIndex(-1);
+  // Update existing record
+  const handleUpdateRecord = async () => {
+    if (!editingId) return;
+    setLoading(true);
+    try {
+      await updateMaterialRecord(editingId, {
+        lendStart: editStart,
+        lendEnd: editEnd,
+      });
+      setEditingId(null);
+      loadData();
+    } catch (e) {
+      console.error(e);
+      Alert.alert('エラー', '更新に失敗しました');
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Delete record
-  const handleDeleteRecord = async idx => {
-    Alert.alert(
-      '確認',
-      'この記録を削除しますか？',
-      [
-        { text: 'キャンセル', style: 'cancel' },
-        { text: '削除', style: 'destructive', onPress: async () => {
-          const updated = records.filter((_, i) => i !== idx);
-          setRecords(updated);
-          await saveRecords(updated);
-          setEditingIndex(-1);
-        }}
-      ]
-    );
+  const handleDeleteRecord = async (id) => {
+    Alert.alert('確認', 'この記録を削除しますか？', [
+      { text: 'キャンセル', style: 'cancel' },
+      {
+        text: '削除',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteMaterialRecord(id);
+            setEditingId(null);
+            loadData();
+          } catch (e) {
+            console.error(e);
+            Alert.alert('エラー', '削除に失敗しました');
+          }
+        },
+      },
+    ]);
   };
 
-  // Render history record
-  const renderRecord = (rec, idx) => {
-    const names = Array.isArray(rec.items) ? rec.items.join(', ') : '';
+  // Render each record
+  const renderRecord = (rec) => {
+    const names = rec.items.join(', ');
     return (
-      <View key={idx} style={tw`bg-white p-3 rounded mb-2`}>      
-        <TouchableOpacity onPress={() => {
-          setEditingIndex(idx);
-          setEditStart(new Date(rec.lendStart));
-          setEditEnd(rec.lendEnd ? new Date(rec.lendEnd) : new Date(rec.lendStart));
-        }}>
+      <View key={rec.id} style={tw`bg-white p-3 rounded mb-2`}>
+        <TouchableOpacity
+          onPress={() => {
+            setEditingId(rec.id);
+            setEditStart(rec.lendStart);
+            setEditEnd(rec.lendEnd || rec.lendStart);
+          }}
+        >
           <Text style={tw`font-bold`}>{names} / {rec.project}</Text>
-          <Text>開始: {dateFmt(new Date(rec.lendStart))}</Text>
-          <Text>終了: {rec.lendEnd ? dateFmt(new Date(rec.lendEnd)) : '未設定'}</Text>
-          <Text style={tw`text-gray-500 text-sm`}>登録: {new Date(rec.timestamp).toLocaleString()}</Text>
+          <Text>開始: {dateFmt(rec.lendStart)}</Text>
+          <Text>終了: {rec.lendEnd ? dateFmt(rec.lendEnd) : '未設定'}</Text>
+          <Text style={tw`text-gray-500 text-sm`}>登録: {rec.timestamp.toLocaleString()}</Text>
         </TouchableOpacity>
 
-        {editingIndex === idx && (
-          <View style={tw`mt-2 bg-gray-50 p-2 rounded`}>          
+        {editingId === rec.id && (
+          <View style={tw`mt-2 bg-gray-50 p-2 rounded`}>            
             <Text style={tw`mb-1`}>貸出開始日</Text>
-            <TouchableOpacity onPress={() => setShowEditStartPicker(true)} style={tw`bg-white p-2 rounded mb-2 border border-gray-300`}>
+            <TouchableOpacity
+              onPress={() => setShowEditStartPicker(true)}
+              style={tw`bg-white p-2 rounded mb-2 border border-gray-300`}
+            >
               <Text>{dateFmt(editStart)}</Text>
             </TouchableOpacity>
             {showEditStartPicker && (
@@ -160,8 +193,12 @@ export default function MaterialsScreen() {
                 onChange={(_, d) => { setShowEditStartPicker(false); if (d) setEditStart(d); }}
               />
             )}
+
             <Text style={tw`mb-1`}>貸出終了日</Text>
-            <TouchableOpacity onPress={() => setShowEditEndPicker(true)} style={tw`bg-white p-2 rounded mb-2 border border-gray-300`}>
+            <TouchableOpacity
+              onPress={() => setShowEditEndPicker(true)}
+              style={tw`bg-white p-2 rounded mb-2 border border-gray-300`}
+            >
               <Text>{dateFmt(editEnd)}</Text>
             </TouchableOpacity>
             {showEditEndPicker && (
@@ -172,12 +209,13 @@ export default function MaterialsScreen() {
                 onChange={(_, d) => { setShowEditEndPicker(false); if (d) setEditEnd(d); }}
               />
             )}
+
             <View style={tw`flex-row justify-between`}>            
               <View style={{ width: '45%' }}>
-                <Button title="保存" onPress={() => handleUpdateRecord(idx)} />
+                <Button title="保存" onPress={handleUpdateRecord} />
               </View>
               <View style={{ width: '45%' }}>
-                <Button title="削除" color="red" onPress={() => handleDeleteRecord(idx)} />
+                <Button title="削除" color="red" onPress={() => handleDeleteRecord(rec.id)} />
               </View>
             </View>
           </View>
@@ -186,28 +224,36 @@ export default function MaterialsScreen() {
     );
   };
 
+  // Active items set
+  const activeItems = new Set(
+    records.filter((r) => !r.lendEnd).flatMap((r) => r.items)
+  );
+
   return (
     <View style={tw`flex-1 flex-row bg-gray-100`}>
       {/* Left column */}
       <ScrollView style={{ width: width * 0.6, padding: 16 }}>
         <Text style={tw`text-2xl font-bold mb-4`}>資材貸出管理</Text>
 
+        {/* Item selection */}
         <Text style={tw`mb-2 font-semibold`}>資材選択</Text>
-        <ScrollView horizontal style={tw`mb-4`}>        
-          {items.map((it, i) => {
+        <ScrollView horizontal style={tw`mb-4`}>
+          {items.map((it) => {
             const disabled = activeItems.has(it.name);
             const selected = selectedItems.includes(it.name);
             return (
               <TouchableOpacity
-                key={i}
-                style={tw`px-4 py-2 mr-2 rounded ${selected ? 'bg-blue-500' : disabled ? 'bg-gray-400' : 'bg-gray-300'}`}
+                key={it.id}
+                style={tw`px-4 py-2 mr-2 rounded ${
+                  selected ? 'bg-blue-500' : disabled ? 'bg-gray-400' : 'bg-gray-300'
+                }`}
                 onPress={() => {
                   if (disabled) {
                     Alert.alert('エラー', `${it.name} は既に貸出中です`);
                   } else if (selected) {
-                    setSelectedItems(sel => sel.filter(x => x !== it.name));
+                    setSelectedItems((sel) => sel.filter((x) => x !== it.name));
                   } else {
-                    setSelectedItems(sel => [...sel, it.name]);
+                    setSelectedItems((sel) => [...sel, it.name]);
                   }
                 }}
               >
@@ -217,12 +263,15 @@ export default function MaterialsScreen() {
           })}
         </ScrollView>
 
+        {/* Project selection */}
         <Text style={tw`mb-2 font-semibold`}>プロジェクト選択</Text>
-        <ScrollView horizontal style={tw`mb-4`}>        
-          {projects.map((p, i) => (
+        <ScrollView horizontal style={tw`mb-4`}>
+          {projects.map((p) => (
             <TouchableOpacity
-              key={i}
-              style={tw`px-4 py-2 mr-2 rounded ${selectedProject === p.name ? 'bg-blue-500' : 'bg-gray-300'}`}
+              key={p.id}
+              style={tw`px-4 py-2 mr-2 rounded ${
+                selectedProject === p.name ? 'bg-blue-500' : 'bg-gray-300'
+              }`}
               onPress={() => {
                 setSelectedProject(p.name);
                 setSelectedItems([]);
@@ -233,6 +282,7 @@ export default function MaterialsScreen() {
           ))}
         </ScrollView>
 
+        {/* Lend start date picker */}
         <Text style={tw`mb-2 font-semibold`}>貸出開始日</Text>
         <TouchableOpacity
           style={tw`bg-white p-4 rounded mb-6 border border-gray-300`}
@@ -245,11 +295,14 @@ export default function MaterialsScreen() {
             value={lendStart}
             mode="date"
             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-            onChange={(_, d) => { setShowStartPicker(false); if (d) setLendStart(d); }}
+            onChange={(_, d) => {
+              setShowStartPicker(false);
+              if (d) setLendStart(d);
+            }}
           />
         )}
 
-        <View style={tw`items-center mb-6`}>
+        <View style={tw`items-center mb-6`}> 
           <View style={{ width: '50%' }}>
             <Button title={loading ? '...' : '貸出記録'} onPress={handleRecord} disabled={loading} />
           </View>
