@@ -14,14 +14,14 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
-import { DateContext } from '../DateContext';
+import { DateContext } from '../../DateContext';
 import {
   fetchUsers,
   fetchProjects,
   fetchAttendanceRecords,
   addAttendanceRecord,
   deleteAttendanceRecord,
-} from '../firestoreService';
+} from '../../firestoreService';
 
 const { width } = Dimensions.get('window');
 

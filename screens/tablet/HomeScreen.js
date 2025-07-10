@@ -12,7 +12,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
-import { DateContext } from '../DateContext';
+import { DateContext } from '../../DateContext';
 
 const { width } = Dimensions.get('window');
 

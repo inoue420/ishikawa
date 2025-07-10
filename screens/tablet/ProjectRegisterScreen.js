@@ -18,7 +18,7 @@ import {
   fetchProjects,
   setProject,
   deleteProject,
-} from '../firestoreService';
+} from '../../firestoreService';
 
 const { width } = Dimensions.get('window');
 

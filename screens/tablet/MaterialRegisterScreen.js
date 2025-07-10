@@ -17,7 +17,7 @@ import {
   addMaterialListItem,
   updateMaterial,
   deleteMaterial,
-} from '../firestoreService';
+} from '../../firestoreService';
 
 const { width } = Dimensions.get('window');
 

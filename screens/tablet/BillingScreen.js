@@ -25,7 +25,7 @@ import {
   fetchMaterialsRecords,
   fetchMaterialsList,
   fetchCompanyProfile,
-} from '../firestoreService';
+} from '../../firestoreService';
 
 const { width } = Dimensions.get('window');
 

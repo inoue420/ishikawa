@@ -17,7 +17,7 @@ import tw from 'twrnc';
 import {
   fetchCompanyProfile,
   setCompanyProfile,
-} from '../firestoreService';
+} from '../../firestoreService';
 
 const { width } = Dimensions.get('window');
 
