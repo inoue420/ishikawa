@@ -1,323 +1,218 @@
-// screens/MaterialsScreen.js
-import React, { useEffect, useState, useCallback } from 'react';
+// screens/phone/MaterialsScreen.js
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
   ScrollView,
+  TouchableOpacity,
+  TextInput,
   Button,
   Alert,
-  Dimensions,
-  TouchableOpacity,
+  KeyboardAvoidingView,
   Platform,
-  RefreshControl,
+  Keyboard
 } from 'react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
-import { useFocusEffect } from '@react-navigation/native';
 import tw from 'twrnc';
 import {
-  fetchMaterialsList,
   fetchProjects,
-  fetchMaterialsRecords,
-  addMaterialRecord,
-  deleteMaterialRecord,
-  updateMaterialRecord,
+  fetchMaterialsList,
+  fetchMaterialUsages,
+  addMaterialUsage,
+  updateMaterialUsage,
+  deleteMaterialUsage,
 } from '../../firestoreService';
 
-const { width } = Dimensions.get('window');
-
 export default function MaterialsScreen() {
-  // Data state
-  const [items, setItems] = useState([]);
   const [projects, setProjects] = useState([]);
-  const [records, setRecords] = useState([]);
+  const [materials, setMaterials] = useState([]);
+  const [selectedProject, setSelectedProject] = useState(null);
+  const [expandedCategories, setExpandedCategories] = useState({});
+  const [qtyMap, setQtyMap] = useState({}); // { partNo: '123', ... }
+  const [usageMap, setUsageMap] = useState({}); 
+  // usageMap: { materialId: { usageId, quantity }, ... }
 
-  // Selection state
-  const [selectedItems, setSelectedItems] = useState([]);
-  const [selectedProject, setSelectedProject] = useState('');
-  const [lendStart, setLendStart] = useState(new Date());
-  const [showStartPicker, setShowStartPicker] = useState(false);
-
-  // Editing state
-  const [editingId, setEditingId] = useState(null);
-  const [editStart, setEditStart] = useState(new Date());
-  const [editEnd, setEditEnd] = useState(new Date());
-  const [showEditStartPicker, setShowEditStartPicker] = useState(false);
-  const [showEditEndPicker, setShowEditEndPicker] = useState(false);
-
-  const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-
-  const dateFmt = (d) => d.toLocaleDateString();
-
-  // Load data from Firestore
-  const loadData = useCallback(async () => {
-    try {
-      const [it, pr, rc] = await Promise.all([
-        fetchMaterialsList(),
-        fetchProjects(),
-        fetchMaterialsRecords(),
-      ]);
-      setItems(it);
-      setProjects(pr);
-      // Convert Firestore Timestamps to JS Date strings
-      const formatted = rc.map((rec) => ({
-        id: rec.id,
-        project: rec.project,
-        items: rec.items,
-        lendStart: rec.lendStart.toDate(),
-        lendEnd: rec.lendEnd ? rec.lendEnd.toDate() : null,
-        timestamp: rec.timestamp.toDate(),
-      }));
-      setRecords(formatted);
-    } catch (e) {
-      console.error(e);
-      Alert.alert('エラー', 'データの読み込みに失敗しました');
-    }
+  // 初期データ読み込み
+  useEffect(() => {
+    (async () => {
+      try {
+        const pr = await fetchProjects();
+        setProjects(pr);
+        const mats = await fetchMaterialsList();
+        setMaterials(mats);
+      } catch (e) {
+        console.error(e);
+        Alert.alert('エラー', '初期データの取得に失敗しました');
+      }
+    })();
   }, []);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-  useFocusEffect(
-    useCallback(() => {
-      loadData();
-    }, [loadData])
-  );
+  // プロジェクト選択時に使用量も取得
+  const onSelectProject = async (proj) => {
+    setSelectedProject(proj);
+    setExpandedCategories({});
+    setQtyMap({});
+    setUsageMap({});
+    try {
+      const usages = await fetchMaterialUsages(proj.id);
+      const map = {};
+      usages.forEach(u => {
+        map[u.materialId] = { usageId: u.id, quantity: u.quantity };
+      });
+      // 初期 qtyMap にも既存値をセット
+      const initialQty = {};
+      Object.entries(map).forEach(([mid, { quantity }]) => {
+        // find partNo for this materialId
+        const mat = materials.find(m => m.id === mid);
+        if (mat) initialQty[mat.partNo] = String(quantity);
+      });
+      setUsageMap(map);
+      setQtyMap(initialQty);
+    } catch (e) {
+      console.error(e);
+      Alert.alert('エラー', '使用量データの取得に失敗しました');
+    }
+  };
 
-  // Persist new record
-  const handleRecord = async () => {
+  // 大分類一覧
+  const categories = Array.from(new Set(materials.map(m => m.category)));
+
+  // 折り畳みトグル
+  const toggleCategory = (cat) =>
+    setExpandedCategories(prev => ({ ...prev, [cat]: !prev[cat] }));
+
+  // 個別数量入力
+  const handleQtyChange = (partNo, text) =>
+    setQtyMap(prev => ({ ...prev, [partNo]: text }));
+
+  // 一括登録
+  const handleBulkRegister = async () => {
     if (!selectedProject) {
-      return Alert.alert('入力エラー', 'プロジェクトを選択してください');
+      Alert.alert('入力エラー', 'プロジェクトを選択してください');
+      return;
     }
-    if (selectedItems.length === 0) {
-      return Alert.alert('入力エラー', '資材を選択してください');
-    }
-    // Check conflicts: items already active (lendEnd null)
-    const activeIds = new Set(records.filter((r) => !r.lendEnd).flatMap((r) => r.items));
-    const conflict = selectedItems.find((it) => activeIds.has(it));
-    if (conflict) {
-      return Alert.alert('エラー', `${conflict} は既に貸出中です`);
-    }
-
-    setLoading(true);
-    try {
-      await addMaterialRecord({
-        project: selectedProject,
-        lendStart,
-        lendEnd: null,
-        items: selectedItems,
-        timestamp: new Date(),
-      });
-      setSelectedItems([]);
-      loadData();
-    } catch (e) {
-      console.error(e);
-      Alert.alert('エラー', '貸出記録の作成に失敗しました');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Update existing record
-  const handleUpdateRecord = async () => {
-    if (!editingId) return;
-    setLoading(true);
-    try {
-      await updateMaterialRecord(editingId, {
-        lendStart: editStart,
-        lendEnd: editEnd,
-      });
-      setEditingId(null);
-      loadData();
-    } catch (e) {
-      console.error(e);
-      Alert.alert('エラー', '更新に失敗しました');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Delete record
-  const handleDeleteRecord = async (id) => {
-    Alert.alert('確認', 'この記録を削除しますか？', [
-      { text: 'キャンセル', style: 'cancel' },
-      {
-        text: '削除',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await deleteMaterialRecord(id);
-            setEditingId(null);
-            loadData();
-          } catch (e) {
+    const promises = [];
+    const errors = [];
+    // materials の中から partNo が qtyMap に入っているものだけ処理
+    materials.forEach(mat => {
+      const raw = qtyMap[mat.partNo];
+      const usage = usageMap[mat.id];
+      // 空欄 → 既存レコードがあれば削除
+      if ((raw == null || raw === '') && usage) {
+        promises.push(
+          deleteMaterialUsage(usage.usageId).catch(e => {
             console.error(e);
-            Alert.alert('エラー', '削除に失敗しました');
-          }
-        },
-      },
-    ]);
+            errors.push(`${mat.partNo}: 削除失敗`);
+          })
+        );
+        return;
+      }
+      // 数値入力あり → 新規 or 上書き
+      if (raw != null && raw !== '') {
+        const qty = parseInt(raw, 10);
+        if (isNaN(qty) || qty < 0) {
+          errors.push(`${mat.partNo}: 数量が不正`);
+          return;
+        }
+        if (usage) {
+          // 上書き更新
+          promises.push(
+            updateMaterialUsage(usage.usageId, qty).catch(e => {
+              console.error(e);
+              errors.push(`${mat.partNo}: 更新失敗`);
+            })
+          );
+        } else {
+          // 新規登録
+          promises.push(
+            addMaterialUsage({
+              projectId: selectedProject.id,
+              materialId: mat.id,
+              quantity: qty,
+            }).catch(e => {
+              console.error(e);
+              errors.push(`${mat.partNo}: 登録失敗`);
+            })
+          );
+        }
+      }
+    });
+
+    await Promise.all(promises);
+    if (errors.length > 0) {
+      Alert.alert('一括登録完了（一部失敗あり）', errors.join('\n'));
+    } else {
+      Alert.alert('一括登録完了', 'すべての数量を登録／更新しました');
+    }
+    // 登録後は最新の usageMap を取得し直す
+    onSelectProject(selectedProject);
   };
-
-  // Render each record
-  const renderRecord = (rec) => {
-    const names = rec.items.join(', ');
-    return (
-      <View key={rec.id} style={tw`bg-white p-3 rounded mb-2`}>
-        <TouchableOpacity
-          onPress={() => {
-            setEditingId(rec.id);
-            setEditStart(rec.lendStart);
-            setEditEnd(rec.lendEnd || rec.lendStart);
-          }}
-        >
-          <Text style={tw`font-bold`}>{names} / {rec.project}</Text>
-          <Text>開始: {dateFmt(rec.lendStart)}</Text>
-          <Text>終了: {rec.lendEnd ? dateFmt(rec.lendEnd) : '未設定'}</Text>
-          <Text style={tw`text-gray-500 text-sm`}>登録: {rec.timestamp.toLocaleString()}</Text>
-        </TouchableOpacity>
-
-        {editingId === rec.id && (
-          <View style={tw`mt-2 bg-gray-50 p-2 rounded`}>            
-            <Text style={tw`mb-1`}>貸出開始日</Text>
-            <TouchableOpacity
-              onPress={() => setShowEditStartPicker(true)}
-              style={tw`bg-white p-2 rounded mb-2 border border-gray-300`}
-            >
-              <Text>{dateFmt(editStart)}</Text>
-            </TouchableOpacity>
-            {showEditStartPicker && (
-              <DateTimePicker
-                value={editStart}
-                mode="date"
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={(_, d) => { setShowEditStartPicker(false); if (d) setEditStart(d); }}
-              />
-            )}
-
-            <Text style={tw`mb-1`}>貸出終了日</Text>
-            <TouchableOpacity
-              onPress={() => setShowEditEndPicker(true)}
-              style={tw`bg-white p-2 rounded mb-2 border border-gray-300`}
-            >
-              <Text>{dateFmt(editEnd)}</Text>
-            </TouchableOpacity>
-            {showEditEndPicker && (
-              <DateTimePicker
-                value={editEnd}
-                mode="date"
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={(_, d) => { setShowEditEndPicker(false); if (d) setEditEnd(d); }}
-              />
-            )}
-
-            <View style={tw`flex-row justify-between`}>            
-              <View style={{ width: '45%' }}>
-                <Button title="保存" onPress={handleUpdateRecord} />
-              </View>
-              <View style={{ width: '45%' }}>
-                <Button title="削除" color="red" onPress={() => handleDeleteRecord(rec.id)} />
-              </View>
-            </View>
-          </View>
-        )}
-      </View>
-    );
-  };
-
-  // Active items set
-  const activeItems = new Set(
-    records.filter((r) => !r.lendEnd).flatMap((r) => r.items)
-  );
 
   return (
-    <View style={tw`flex-1 flex-row bg-gray-100`}>
-      {/* Left column */}
-      <ScrollView style={{ width: width * 0.6, padding: 16 }}>
-        <Text style={tw`text-2xl font-bold mb-4`}>資材貸出管理</Text>
+    <KeyboardAvoidingView
+      style={tw`flex-1 bg-gray-100`}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView contentContainerStyle={tw`p-4`} keyboardShouldPersistTaps="handled">
+        <Text style={tw`text-2xl font-bold mb-4`}>資材使用一括登録</Text>
 
-        {/* Item selection */}
-        <Text style={tw`mb-2 font-semibold`}>資材選択</Text>
-        <ScrollView horizontal style={tw`mb-4`}>
-          {items.map((it) => {
-            const disabled = activeItems.has(it.name);
-            const selected = selectedItems.includes(it.name);
-            return (
-              <TouchableOpacity
-                key={it.id}
-                style={tw`px-4 py-2 mr-2 rounded ${
-                  selected ? 'bg-blue-500' : disabled ? 'bg-gray-400' : 'bg-gray-300'
-                }`}
-                onPress={() => {
-                  if (disabled) {
-                    Alert.alert('エラー', `${it.name} は既に貸出中です`);
-                  } else if (selected) {
-                    setSelectedItems((sel) => sel.filter((x) => x !== it.name));
-                  } else {
-                    setSelectedItems((sel) => [...sel, it.name]);
-                  }
-                }}
-              >
-                <Text style={tw`text-white`}>{it.name}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-
-        {/* Project selection */}
-        <Text style={tw`mb-2 font-semibold`}>プロジェクト選択</Text>
-        <ScrollView horizontal style={tw`mb-4`}>
-          {projects.map((p) => (
+        {/* プロジェクト選択 */}
+        <Text style={tw`mb-2 font-semibold`}>プロジェクトを選択</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={tw`mb-4`}>
+          {projects.map(proj => (
             <TouchableOpacity
-              key={p.id}
+              key={proj.id}
+              onPress={() => onSelectProject(proj)}
               style={tw`px-4 py-2 mr-2 rounded ${
-                selectedProject === p.name ? 'bg-blue-500' : 'bg-gray-300'
+                selectedProject?.id === proj.id ? 'bg-blue-500' : 'bg-gray-300'
               }`}
-              onPress={() => {
-                setSelectedProject(p.name);
-                setSelectedItems([]);
-              }}
             >
-              <Text style={tw`text-white`}>{p.name}</Text>
+              <Text style={tw`text-white`}>{proj.name}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
 
-        {/* Lend start date picker */}
-        <Text style={tw`mb-2 font-semibold`}>貸出開始日</Text>
-        <TouchableOpacity
-          style={tw`bg-white p-4 rounded mb-6 border border-gray-300`}
-          onPress={() => setShowStartPicker(true)}
-        >
-          <Text>{dateFmt(lendStart)}</Text>
-        </TouchableOpacity>
-        {showStartPicker && (
-          <DateTimePicker
-            value={lendStart}
-            mode="date"
-            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-            onChange={(_, d) => {
-              setShowStartPicker(false);
-              if (d) setLendStart(d);
-            }}
-          />
-        )}
-
-        <View style={tw`items-center mb-6`}> 
-          <View style={{ width: '50%' }}>
-            <Button title={loading ? '...' : '貸出記録'} onPress={handleRecord} disabled={loading} />
+        {/* 大分類 列表 */}
+        {selectedProject && categories.map(cat => (
+          <View key={cat} style={tw`mb-4`}>
+            <TouchableOpacity
+              onPress={() => toggleCategory(cat)}
+              style={tw`bg-gray-200 p-3 rounded`}
+            >
+              <Text style={tw`font-bold`}>{cat}</Text>
+            </TouchableOpacity>
+            {expandedCategories[cat] && materials
+              .filter(m => m.category === cat)
+              .map(mat => (
+                <View key={mat.id} style={tw`bg-white p-3 ml-4 my-2 rounded shadow`}>
+                  <Text style={tw`font-semibold`}>
+                    {mat.name1}{mat.name2 ? ` / ${mat.name2}` : ''}
+                  </Text>
+                  <Text>品番: {mat.partNo}</Text>
+                    <TextInput
+                      style={tw`border border-gray-300 p-2 rounded w-full mt-2`}
+                      placeholder="数量を入力"
+                      keyboardType="numeric"
+                      returnKeyType="done"           // 完了キーを “Done” に
+                      blurOnSubmit={true}            // 完了でフォーカスを外す
+                      onSubmitEditing={() => Keyboard.dismiss()} // 完了キーでキーボードを閉じる
+                      value={qtyMap[mat.partNo] ?? ''}
+                      onChangeText={t => handleQtyChange(mat.partNo, t)}
+                    />
+                </View>
+              ))
+            }
           </View>
-        </View>
-      </ScrollView>
+        ))}
 
-      {/* Right column */}
-      <ScrollView style={{ width: width * 0.4, padding: 16 }}>
-        <Text style={tw`text-2xl font-bold mb-4`}>履歴一覧</Text>
-        {records.length === 0 ? (
-          <Text style={tw`text-center text-gray-500`}>記録なし</Text>
-        ) : (
-          records.map(renderRecord)
+        {/* 一括登録ボタン */}
+        {selectedProject && (
+          <View style={tw`items-center mt-4`}>
+            <View style={{ width: '60%' }}>
+              <Button title="一括登録" onPress={handleBulkRegister} />
+            </View>
+          </View>
         )}
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }

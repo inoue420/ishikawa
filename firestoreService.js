@@ -1,5 +1,4 @@
 // firestoreService.js
-
 import {
   collection,
   doc,
@@ -15,6 +14,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebaseConfig';
 
+// コレクション定義
 const usersCol           = collection(db, 'users');
 const projectsCol        = collection(db, 'projects');
 const attendanceCol      = collection(db, 'attendanceRecords');
@@ -22,82 +22,61 @@ const materialsListCol   = collection(db, 'materialsList');
 const materialsRecCol    = collection(db, 'materialsRecords');
 const companyProfileCol  = collection(db, 'companyProfile');
 
-/**
- * ============================================
+/** ============================================
  * Company Profile (会社情報)
- * ============================================
- */
+ * ============================================ */
 export async function fetchCompanyProfile() {
   const docRef = doc(companyProfileCol, 'default');
   const snap = await getDoc(docRef);
   if (!snap.exists()) return null;
   return { id: snap.id, ...snap.data() };
 }
-
 export async function setCompanyProfile(data) {
   const docRef = doc(companyProfileCol, 'default');
-  await setDoc(docRef, data);
+  return setDoc(docRef, data);
 }
 
-/**
- * ============================================
+/** ============================================
  * Users コレクション
- * ============================================
- */
+ * ============================================ */
 export async function fetchUsers() {
-  const snapshot = await getDocs(usersCol);
-  return snapshot.docs.map(docSnap => ({
-    id: docSnap.id,
-    ...docSnap.data(),
-  }));
+  const snaps = await getDocs(usersCol);
+  return snaps.docs.map(d => ({ id: d.id, ...d.data() }));
 }
-
 export async function fetchUserById(userId) {
   const docRef = doc(usersCol, userId);
   const snap = await getDoc(docRef);
   if (!snap.exists()) return null;
   return { id: snap.id, ...snap.data() };
 }
-
 export async function addUser(userData) {
   const ref = await addDoc(usersCol, userData);
   return ref.id;
 }
-
 export async function updateUser(userId, updatedFields) {
-  const docRef = doc(usersCol, userId);
-  await updateDoc(docRef, updatedFields);
+  const ref = doc(usersCol, userId);
+  return updateDoc(ref, updatedFields);
 }
-
 export async function deleteUser(userId) {
-  const docRef = doc(usersCol, userId);
-  await deleteDoc(docRef);
+  const ref = doc(usersCol, userId);
+  return deleteDoc(ref);
 }
 
-/**
- * ============================================
+/** ============================================
  * Projects コレクション
- * ============================================
- */
+ * ============================================ */
 export async function fetchProjects() {
-  const snapshot = await getDocs(projectsCol);
-  return snapshot.docs.map(docSnap => ({
-    id: docSnap.id,
-    ...docSnap.data(),
-  }));
+  const snaps = await getDocs(projectsCol);
+  return snaps.docs.map(d => ({ id: d.id, ...d.data() }));
 }
-
 export async function fetchProjectById(projectId) {
   const docRef = doc(projectsCol, projectId);
   const snap = await getDoc(docRef);
   if (!snap.exists()) return null;
   return { id: snap.id, ...snap.data() };
 }
-
 export async function setProject(projectId, projectData) {
-  const docRef = projectId
-    ? doc(projectsCol, projectId)
-    : doc(projectsCol);
+  const docRef = projectId ? doc(projectsCol, projectId) : doc(projectsCol);
   const dataToSave = {
     ...projectData,
     startDate: projectData.startDate instanceof Date
@@ -107,32 +86,25 @@ export async function setProject(projectId, projectData) {
       ? Timestamp.fromDate(projectData.endDate)
       : projectData.endDate,
   };
-  await setDoc(docRef, dataToSave);
+  return setDoc(docRef, dataToSave);
 }
-
 export async function deleteProject(projectId) {
   const docRef = doc(projectsCol, projectId);
-  await deleteDoc(docRef);
+  return deleteDoc(docRef);
 }
 
-/**
- * ============================================
- * Attendance Records (勤怠レコード) コレクション
- * ============================================
- */
+/** ============================================
+ * Attendance Records (勤怠レコード)
+ * ============================================ */
 export async function fetchAttendanceRecords(targetDate = null) {
   let q = attendanceCol;
   if (targetDate) {
     const dateStr = targetDate.toISOString().slice(0, 10);
     q = query(attendanceCol, where('dateStr', '==', dateStr));
   }
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(docSnap => ({
-    id: docSnap.id,
-    ...docSnap.data(),
-  }));
+  const snaps = await getDocs(q);
+  return snaps.docs.map(d => ({ id: d.id, ...d.data() }));
 }
-
 export async function addAttendanceRecord(recordData) {
   const date = recordData.date instanceof Date
     ? recordData.date
@@ -146,84 +118,128 @@ export async function addAttendanceRecord(recordData) {
   const ref = await addDoc(attendanceCol, dataToSave);
   return ref.id;
 }
-
 export async function deleteAttendanceRecord(recordId) {
-  const docRef = doc(attendanceCol, recordId);
-  await deleteDoc(docRef);
+  const ref = doc(attendanceCol, recordId);
+  return deleteDoc(ref);
 }
 
-/**
- * ============================================
- * Materials List (資材マスタ) コレクション
- * ============================================
- */
+/** ============================================
+ * Materials List (資材マスタ)
+ * schema: { category, name1, name2, partNo }
+ * ============================================ */
 export async function fetchMaterialsList() {
-  const snapshot = await getDocs(materialsListCol);
-  return snapshot.docs.map(docSnap => ({
-    id: docSnap.id,
-    ...docSnap.data(),
-  }));
+  const snaps = await getDocs(materialsListCol);
+  return snaps.docs.map(d => ({ id: d.id, ...d.data() }));
 }
-
-export async function addMaterialListItem(data) {
-  const ref = await addDoc(materialsListCol, data);
-  return ref.id;
+export async function addMaterialListItem({ category, name1, name2, partNo }) {
+  return addDoc(materialsListCol, { category, name1, name2, partNo });
 }
-
-export async function updateMaterial(materialId, updatedFields) {
-  const docRef = doc(materialsListCol, materialId);
-  await updateDoc(docRef, updatedFields);
+export async function updateMaterial(materialId, { category, name1, name2, partNo }) {
+  const ref = doc(materialsListCol, materialId);
+  return updateDoc(ref, { category, name1, name2, partNo });
 }
-
 export async function deleteMaterial(materialId) {
-  const docRef = doc(materialsListCol, materialId);
-  await deleteDoc(docRef);
+  const ref = doc(materialsListCol, materialId);
+  return deleteDoc(ref);
+}
+
+/** ============================================
+ * Materials Records (資材使用レコード)
+ * items: [{ partNo, qty }]
+ * ============================================ */
+export async function fetchMaterialsRecords() {
+  const snaps = await getDocs(materialsRecCol);
+  return snaps.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+export async function addMaterialRecord({
+  project,
+  items,
+  lendStart,
+  lendEnd = null,
+  timestamp,
+}) {
+  const data = {
+    project,
+    items,
+    lendStart: Timestamp.fromDate(lendStart),
+    lendEnd:   lendEnd ? Timestamp.fromDate(lendEnd) : null,
+    timestamp: Timestamp.fromDate(timestamp),
+  };
+  return addDoc(materialsRecCol, data);
+}
+export async function updateMaterialRecord(recordId, { lendStart, lendEnd }) {
+  const ref = doc(materialsRecCol, recordId);
+  const data = {
+    lendStart: Timestamp.fromDate(lendStart),
+    lendEnd:   lendEnd ? Timestamp.fromDate(lendEnd) : null,
+  };
+  return updateDoc(ref, data);
+}
+export async function deleteMaterialRecord(recordId) {
+  const ref = doc(materialsRecCol, recordId);
+  return deleteDoc(ref);
+}
+
+/** ============================================
+ * Material Usage (資材使用量) トップレベルコレクション
+ * schema: { projectId, materialId, quantity, timestamp }
+ * ============================================ */
+const materialsUsageCol = collection(db, 'materialsUsage');
+
+/**
+ * 資材使用量を記録
+ * @param {{ projectId: string, materialId: string, quantity: number }} params
+ * @returns {Promise<string>} 追加したドキュメントID
+ */
+export async function addMaterialUsage({ projectId, materialId, quantity }) {
+  const ref = await addDoc(materialsUsageCol, {
+    projectId,
+    materialId,
+    quantity,
+    timestamp: Timestamp.fromDate(new Date()),
+  });
+  return ref.id;
 }
 
 /**
- * ============================================
- * Materials Records (資材使用レコード) コレクション
- * ============================================
+ * 全体またはプロジェクトごとの使用量を取得
+ * @param {string | null} projectId
+ * @returns {Promise<Array<{ id: string, projectId: string, materialId: string, quantity: number, timestamp: Date }>>}
  */
-export async function fetchMaterialsRecords() {
-  const snapshot = await getDocs(materialsRecCol);
-  return snapshot.docs.map(docSnap => ({
-    id: docSnap.id,
-    ...docSnap.data(),
-  }));
+export async function fetchMaterialUsages(projectId = null) {
+  let q = materialsUsageCol;
+  if (projectId) {
+    q = query(materialsUsageCol, where('projectId', '==', projectId));
+  }
+  const snaps = await getDocs(q);
+  return snaps.docs.map(d => {
+    const data = d.data();
+    return {
+      id: d.id,
+      projectId: data.projectId,
+      materialId: data.materialId,
+      quantity: data.quantity,
+      timestamp: data.timestamp.toDate(),
+    };
+  });
 }
-
-export async function addMaterialRecord(recordData) {
-  const dataToSave = {
-    ...recordData,
-    lendStart: recordData.lendStart instanceof Date
-      ? Timestamp.fromDate(recordData.lendStart)
-      : recordData.lendStart,
-    lendEnd: recordData.lendEnd instanceof Date
-      ? Timestamp.fromDate(recordData.lendEnd)
-      : recordData.lendEnd || null,
-    timestamp: recordData.timestamp instanceof Date
-      ? Timestamp.fromDate(recordData.timestamp)
-      : recordData.timestamp,
-  };
-  const ref = await addDoc(materialsRecCol, dataToSave);
-  return ref.id;
+/**
+ * 既存の使用量を上書き更新
+ * @param {string} usageId ドキュメントID
+ * @param {number} quantity 新しい数量
+ */
+export async function updateMaterialUsage(usageId, quantity) {
+  const ref = doc(db, 'materialsUsage', usageId);
+  return updateDoc(ref, {
+    quantity,
+    timestamp: Timestamp.fromDate(new Date()),
+  });
 }
-
-export async function updateMaterialRecord(recordId, updatedData) {
-  const dataToSave = {
-    lendStart: updatedData.lendStart instanceof Date
-      ? Timestamp.fromDate(updatedData.lendStart)
-      : updatedData.lendStart,
-    lendEnd: updatedData.lendEnd instanceof Date
-      ? Timestamp.fromDate(updatedData.lendEnd)
-      : updatedData.lendEnd,
-  };
-  const docRef = doc(materialsRecCol, recordId);
-  await updateDoc(docRef, dataToSave);
-}
-
-export async function deleteMaterialRecord(recordId) {
-  const docRef = doc(materialsRecCol, recordId);
-  await deleteDoc(docRef);
+/**
+ * 資材使用量レコードを削除
+ * @param {string} usageId ドキュメントID
+ */
+export async function deleteMaterialUsage(usageId) {
+  const ref = doc(db, 'materialsUsage', usageId);
+  return deleteDoc(ref);
 }
