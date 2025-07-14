@@ -1,4 +1,4 @@
-// screens/UserRegisterScreen.js
+// screens/phone/UserRegisterScreen.js
 
 import React, { useEffect, useState, useCallback } from 'react';
 import {
