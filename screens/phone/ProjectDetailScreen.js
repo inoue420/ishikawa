@@ -2,33 +2,24 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, ActivityIndicator } from 'react-native';
 import tw from 'twrnc';
-import {
-  fetchAttendanceRecords,
-  fetchMaterialsRecords
-} from '../../firestoreService';
+import {  fetchMaterialsRecords } from '../../firestoreService';
 
 export default function ProjectDetailScreen({ route }) {
   const { projectId, date } = route.params;  // date は 'YYYY-MM-DD' 文字列想定
   const [loading, setLoading] = useState(true);
-  const [attendance, setAttendance] = useState([]);
   const [materials, setMaterials] = useState([]);
 
   useEffect(() => {
     (async () => {
       setLoading(true);
-      // 全件取ってきてフィルタでも OK
-      const allAtt = await fetchAttendanceRecords(new Date(date));
+      // マテリアルレコードだけ取得・フィルタ
       const allMat = await fetchMaterialsRecords();
-      
-      setAttendance(
-        allAtt.filter(r => r.project === projectId)
-      );
-      setMaterials(
-        allMat.filter(m =>
+      const filtered = allMat.filter(
+        m =>
           m.project === projectId &&
-          m.timestamp.toDate().toISOString().slice(0,10) === date
-        )
+          m.timestamp.toDate().toISOString().slice(0, 10) === date
       );
+      setMaterials(filtered);
 
       setLoading(false);
     })();
@@ -43,24 +34,31 @@ export default function ProjectDetailScreen({ route }) {
   }
 
   return (
-    <ScrollView style={tw`flex-1 bg-gray-100 p-4`}>
-      <Text style={tw`text-2xl font-bold mb-4`}>プロジェクト詳細</Text>
-      <Text style={tw`text-lg mb-2`}>出退勤: {attendance.length}件</Text>
-      {attendance.map((rec,i) => (
-        <View key={i} style={tw`mb-2 p-2 bg-white rounded`}>
-          <Text>担当者: {rec.users.join(', ')}</Text>
-        </View>
-      ))}
+    <ScrollView contentContainerStyle={tw`p-4`}>
+      <Text style={tw`text-xl font-bold`}>プロジェクト詳細</Text>
 
-      <Text style={tw`text-lg mt-4 mb-2`}>資材操作: {materials.length}件</Text>
-      {materials.map((m,i) => (
-        <View key={i} style={tw`mb-2 p-2 bg-white rounded`}>
-          <Text>アイテム: {m.item}</Text>
-          <Text>開始: {m.lendStart.toDate().toLocaleTimeString()}</Text>
-        </View>
-      ))}
-
-      {/* 仕掛件数や請求書数も同様に fetch & 表示 */}
+      {/* 資材操作 */}
+      <Text style={tw`mt-4 text-lg`}>資材操作: {materials.length}件</Text>
+      {materials.length === 0 ? (
+        <Text style={tw`mt-2`}>データがありません</Text>
+      ) : (
+        materials.map((m, idx) => (
+          <View key={idx} style={tw`mt-2 p-3 bg-white rounded-lg shadow`}>
+            {Array.isArray(m.items) ? (
+              m.items.map((item, i) => (
+                <Text key={i}>
+                  品目: {item.name1 || item.partNo} / 数量: {item.qty}
+                </Text>
+              ))
+            ) : (
+              <Text>不正なデータ形式です</Text>
+            )}
+            <Text style={tw`mt-2`}>
+              開始: {m.lendStart?.toDate()?.toLocaleTimeString()}
+            </Text>
+          </View>
+        ))
+      )}
     </ScrollView>
   );
-}
+ }

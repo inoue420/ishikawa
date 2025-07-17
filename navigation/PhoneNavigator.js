@@ -20,7 +20,7 @@ export default function PhoneNavigator( { userEmail } ) {
         tabBarIcon: ({ color, size }) => {
           let iconName = 'ellipse-outline';
           switch (route.name) {
-            case 'Home':       iconName = 'home-outline'; break;
+            case 'HomeStack':       iconName = 'home-outline'; break;
             case 'Attendance': iconName = 'time-outline'; break;
             case 'Materials':  iconName = 'cube-outline'; break;
             case 'WIP':        iconName = 'construct-outline'; break;
@@ -34,7 +34,7 @@ export default function PhoneNavigator( { userEmail } ) {
         headerShown:             false,
       })}
     >
-      <Tab.Screen name="Home"       component={HomeStackNavigator} />
+      <Tab.Screen name="HomeStack"  component={HomeStackNavigator} />
       <Tab.Screen name="Attendance" component={AttendanceScreen}   initialParams={{ userEmail }} />
       <Tab.Screen name="Materials"  component={MaterialsScreen} />
       <Tab.Screen name="WIP"        component={WIPScreen} />
