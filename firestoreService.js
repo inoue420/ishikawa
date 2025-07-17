@@ -54,14 +54,7 @@ export async function addUser(userData) {
   const ref = await addDoc(usersCol, userData);
   return ref.id;
 }
-export async function updateUser(userId, updatedFields) {
-  const ref = doc(usersCol, userId);
-  return updateDoc(ref, updatedFields);
-}
-export async function deleteUser(userId) {
-  const ref = doc(usersCol, userId);
-  return deleteDoc(ref);
-}
+
 
 /** ============================================
  * Projects コレクション
@@ -236,31 +229,55 @@ export async function updateMaterialUsage(usageId, quantity) {
     timestamp: Timestamp.fromDate(new Date()),
   });
 }
+/** ============================================
+ * Employees コレクション（従業員管理用）
+ * ドキュメント ID にメールアドレスを使用
+ * ============================================ */
 /**
- * 資材使用量レコードを削除
- * @param {string} usageId ドキュメントID
- */
-export async function deleteMaterialUsage(usageId) {
-  const ref = doc(db, 'materialsUsage', usageId);
-  return deleteDoc(ref);
-}
-
-/**
- * 従業員を登録（管理者用）
- * @param {{ email: string, name: string, affiliation: string, role: string }} data
+ * 従業員を登録
+ * @param {{ email: string, name: string, affiliation: string }} data
  */
 export async function registerUser(data) {
-  const ref = doc(employeesCol, data.email);
-  await setDoc(ref, data);
+  const email = data.email.trim().toLowerCase();
+  const ref = doc(employeesCol, email);
+  await setDoc(ref, { ...data, email });
 }
 
 /**
  * メールアドレスで従業員を取得
  * @param {string} email
- * @returns {object|null}
  */
 export async function fetchUserByEmail(email) {
-  const lower = email.toLowerCase();
+  const lower = email.trim().toLowerCase();
   const snap = await getDoc(doc(employeesCol, lower));
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
+
+/**
+ * 従業員一覧を取得
+ */
+export async function fetchAllUsers() {
+  const snaps = await getDocs(employeesCol);
+  return snaps.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+/**
+ * 従業員情報を更新
+ * @param {string} email
+ * @param {{ name: string, affiliation: string }} data
+ */
+export async function updateUser(email, data) {
+  const lower = email.trim().toLowerCase();
+  const ref = doc(employeesCol, lower);
+  return updateDoc(ref, data);
+}
+
+/**
+ * 従業員を削除
+ * @param {string} email
+ */
+export async function deleteUser(email) {
+  const lower = email.trim().toLowerCase();
+  const ref = doc(employeesCol, lower);
+  return deleteDoc(ref);
 }
