@@ -281,3 +281,74 @@ export async function deleteUser(email) {
   const ref = doc(employeesCol, lower);
   return deleteDoc(ref);
 }
+
+ /**
+  * 指定社員・日付の勤怠レコードを取得
+  * @param {string} employeeId
+  * @param {string} dateStr YYYY-MM-DD
+  * @returns {Promise<Array<{ id: string, type: 'in'|'out', timestamp: Date }>>}
+  */
+ export async function fetchAttendanceByEmployeeAndDate(employeeId, dateStr) {
+   const q = query(
+     attendanceCol,
+     where('employeeId', '==', employeeId),
+     where('date', '==', dateStr)
+   );
+   const snaps = await getDocs(q);
+   return snaps.docs.map(d => ({
+     id: d.id,
+     type: d.data().type,
+     timestamp: d.data().timestamp.toDate(),
+   }));
+ }
+
+ /**
+  * 出退勤打刻（upsert）
+  * @param {string} employeeId
+  * @param {string} dateStr YYYY-MM-DD
+  * @param {'in'|'out'} type
+  * @param {Date} time
+  */
+ export async function upsertAttendance(employeeId, dateStr, type, time) {
+   const existing = await fetchAttendanceByEmployeeAndDate(employeeId, dateStr);
+   const ts = Timestamp.fromDate(time);
+   if (existing.length) {
+     // 先頭レコードを更新
+     const ref = doc(attendanceCol, existing[0].id);
+     return updateDoc(ref, { timestamp: ts });
+   } else {
+     // 新規作成
+     return addDoc(attendanceCol, { employeeId, date: dateStr, type, timestamp: ts });
+   }
+ }
+
+ /**
+  * 指定社員の指定期間の勤怠履歴を取得
+  * @param {string} employeeId
+  * @param {string} startDate YYYY-MM-DD
+  * @param {string} endDate YYYY-MM-DD
+  * @returns {Promise<Array<{ date: string, in?: Date, out?: Date }>>}
+  */
+export async function upsertAttendance(employeeId, dateStr, type, time) {
+  const q = query(
+    attendanceCol,
+    where('employeeId', '==', employeeId),
+    where('date', '==', dateStr),
+    where('type', '==', type)
+  );
+  const snaps = await getDocs(q);
+  const nowStamp = Timestamp.fromDate(time);
+  if (!snaps.empty) {
+    // 最初の1件を更新
+    const ref = snaps.docs[0].ref;
+    return updateDoc(ref, { timestamp: nowStamp });
+  } else {
+    // 新規作成
+    return addDoc(attendanceCol, {
+      employeeId,
+      date: dateStr,
+      type,
+      timestamp: nowStamp,
+    });
+  }
+}

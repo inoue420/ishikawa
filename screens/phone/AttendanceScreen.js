@@ -1,153 +1,135 @@
-// screens/AttendanceScreen.js
-import React, { useEffect, useState, useCallback, useContext } from 'react';
+// screens/phone/AttendanceScreen.js
+import React, { useEffect, useState, useContext } from 'react';
 import {
   View,
   Text,
-  ScrollView,
-  TouchableOpacity,
   Button,
-  Alert,
-  Dimensions,
-  RefreshControl,
+  FlatList,
+  TouchableOpacity,
+  TextInput,
   Platform,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
 import { DateContext } from '../../DateContext';
+import { fetchUserByEmail, fetchAttendanceByEmployeeAndDate, upsertAttendance} from '../../firestoreService';
+
+
 import {
-  fetchUsers,
-  fetchProjects,
-  fetchAttendanceRecords,
-  addAttendanceRecord,
-  deleteAttendanceRecord,
-} from '../../firestoreService';
+  collection,
+  getDocs,
+  addDoc,
+  updateDoc,
+  doc,
+  Timestamp,
+} from 'firebase/firestore';
+import { db } from '../../firebaseConfig';
 
-const { width } = Dimensions.get('window');
-
-export default function AttendanceScreen() {
+export default function AttendanceScreen({ route }) {
+  const userEmail = route.params?.userEmail ?? 'admin';
   const { date: selectedDate, setDate } = useContext(DateContext);
-  const [users, setUsers] = useState([]);
-  const [projects, setProjects] = useState([]);
+  const [userName, setUserName] = useState('');
   const [records, setRecords] = useState([]);
-  const [selectedProject, setSelectedProject] = useState('');
-  const [selectedUsers, setSelectedUsers] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [showPicker, setShowPicker] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
+  const [recordInputs, setRecordInputs] = useState({});
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
-  // YYYY-MM-DD 形式の文字列を返すヘルパー
-  const dateKey = (date) => date.toISOString().slice(0, 10);
+  const dateKey = d => d.toISOString().slice(0, 10);
 
-  // Firestore からユーザー一覧・プロジェクト一覧・当日の出勤レコードを取得
-  const loadData = useCallback(async () => {
-    try {
-      const [u, p, r] = await Promise.all([
-        fetchUsers(),
-        fetchProjects(),
-        fetchAttendanceRecords(selectedDate),
-      ]);
-      setUsers(u);
-      setProjects(p);
-      setRecords(r);
-      // 日付変更時は選択プロジェクト／ユーザーをリセット
-      setSelectedProject('');
-      setSelectedUsers([]);
-    } catch (e) {
-      console.error(e);
-      Alert.alert('エラー', 'データの読み込みに失敗しました');
-    }
+  // ユーザー名ロード
+  useEffect(() => {
+    (async () => {
+      const user = await fetchUserByEmail(userEmail);
+      setUserName(user?.name ?? userEmail);
+    })();
+  }, [userEmail]);
+
+  // 1) レコードロード
+  const loadRecords = async () => {
+    const list = await fetchAttendanceByEmployeeAndDate(
+      userEmail,
+      dateKey(selectedDate)
+    );
+    // 出勤を先、退勤を後でソート
+    const ins = list.filter(i => i.type === 'in');
+    const outs = list.filter(i => i.type === 'out');
+    setRecords([...ins, ...outs]);
+  };
+
+  // 日付変更・初回ロード
+  useEffect(() => {
+    loadRecords();
   }, [selectedDate]);
 
-  // 画面フォーカス時と selectedDate の変更時に再取得
-  useFocusEffect(
-    useCallback(() => {
-      const fetchData = async () => {
-        await loadData();
-      };
-      fetchData();
-    }, [loadData])
-  );
+  // recordInputs 初期化
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    const inputs = {};
+    records.forEach(item => {
+      const h = item.timestamp.getHours();
+      const m = item.timestamp.getMinutes();
+      inputs[item.id] = String(h * 100 + m).padStart(4, '0');
+    });
+    setRecordInputs(inputs);
+  }, [records]);
 
-  // カレンダーで日付を選択したとき：DateContext 経由で state を更新
+  // Android でピッカーをインパティブに開く
+  useEffect(() => {
+    if (Platform.OS === 'android' && showDatePicker) {
+      DateTimePickerAndroid.open({
+        value: selectedDate,
+        onChange: onDateChange,
+        mode: 'date',
+      });
+      setShowDatePicker(false);
+    }
+  }, [showDatePicker]);
+
+      // 出退勤打刻 (既存レコードがあれば更新、なければ作成)
+    // 2) upsert 打刻
+    const handlePunch = async type => {
+      await upsertAttendance(
+        userEmail,
+        dateKey(selectedDate),
+        type,
+        new Date()
+      );
+      loadRecords();
+    };
+
+    // 時分編集保存
+// 時分編集保存
+  const handleSaveTime = async id => {
+    const raw = recordInputs[id].replace(/\D/g, '');
+    const val = parseInt(raw, 10);
+    if (isNaN(val)) return;
+    const hh = Math.floor(val / 100);
+    const mm = val % 100;
+    const dt = new Date(selectedDate);
+    dt.setHours(hh, mm, 0, 0);
+    await updateDoc(doc(db, 'attendanceRecords', id), {
+      timestamp: Timestamp.fromDate(dt),
+    });
+    loadRecords();
+  };
+
+  // 日付ピックハンドラ
   const onDateChange = (_, d) => {
-    // Android は選択後に自動で閉じる
-    if (Platform.OS === 'android') setShowPicker(false);
+    if (Platform.OS === 'android') return;
     if (d) setDate(d);
   };
 
-  // 出勤確定ボタン押下時：Firestore にレコードを追加
-  const confirmAttendance = async () => {
-    if (!selectedProject) {
-      return Alert.alert('入力エラー', 'プロジェクトを選択してください');
-    }
-    if (!selectedUsers.length) {
-      return Alert.alert('入力エラー', 'ユーザーを選択してください');
-    }
-    setLoading(true);
-    try {
-      await addAttendanceRecord({
-        project: selectedProject,
-        date: selectedDate,
-        users: selectedUsers,
-      });
-      Alert.alert('成功', '出勤を確定しました');
-      loadData();
-    } catch (e) {
-      console.error(e);
-      Alert.alert('エラー', '出勤確定に失敗しました');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 編集ボタン押下時：該当レコードの内容をフォームにセット
-  const editRecord = (rec) => {
-    setSelectedProject(rec.project);
-    setSelectedUsers(rec.users);
-  };
-
-  // 削除ボタン押下時：Firestore からレコードを削除
-  const handleDelete = (rec) => {
-    Alert.alert(
-      '確認',
-      `${rec.project} の当日の参加記録を削除しますか？`,
-      [
-        { text: 'キャンセル', style: 'cancel' },
-        {
-          text: '削除',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteAttendanceRecord(rec.id);
-              loadData();
-            } catch (e) {
-              console.error(e);
-              Alert.alert('削除エラー', '削除に失敗しました');
-            }
-          },
-        },
-      ]
-    );
-  };
+  // HH:MM 表示
+  const formatHM = val => val.padStart(4, '0').replace(/(\d{2})(\d{2})/, '$1:$2');
 
   return (
     <View style={tw`flex-1 bg-gray-100`}>
-      {/* 日付表示＆カレンダー呼び出し */}
+      {/* 日付選択 */}
       <View style={tw`flex-row items-center mt-4 p-4 bg-white border-b border-gray-300`}>
-        <TouchableOpacity style={tw`flex-1`} onPress={() => setShowPicker(true)}>
-          <Text style={tw`text-lg`}>{dateKey(selectedDate)}</Text>
+        <TouchableOpacity style={tw`flex-1`} onPress={() => setShowDatePicker(true)}>
+          <Text style={tw`text-lg text-center`}>{dateKey(selectedDate)}</Text>
         </TouchableOpacity>
-        <View style={tw`ml-2 w-1/3`}>
-          <Button title="更新" onPress={loadData} />
-        </View>
       </View>
-
-      {/* カレンダーコンポーネント */}
-      {showPicker && (
+      {/* iOS: コンポーネントレンダー */}
+      {Platform.OS === 'ios' && showDatePicker && (
         <DateTimePicker
           value={selectedDate}
           mode="date"
@@ -156,91 +138,37 @@ export default function AttendanceScreen() {
         />
       )}
 
-      <View style={tw`flex-1 flex-row`}>
-        {/* 左カラム：出勤確定フォーム */}
-        <ScrollView style={{ width: width * 0.6, padding: 16 }}>
-          <Text style={tw`text-2xl font-bold mb-4`}>出勤確定</Text>
+      {/* ユーザー名 */}
+      <Text style={tw`text-xl text-center my-4`}>{userName}さん</Text>
 
-          {/* プロジェクト選択 */}
-          <ScrollView horizontal style={tw`mb-4`}>
-            {projects.map((proj) => (
-              <TouchableOpacity
-                key={proj.id}
-                style={tw`px-4 py-2 mr-2 rounded ${
-                  selectedProject === proj.name ? 'bg-blue-500' : 'bg-gray-300'
-                }`}
-                onPress={() => {
-                  setSelectedProject(proj.name);
-                  setSelectedUsers([]);
-                }}
-              >
-                <Text style={tw`text-white`}>{proj.name}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-
-          {/* ユーザー選択 */}
-          <Text style={tw`mb-2 font-semibold`}>ユーザー</Text>
-          <View style={tw`flex-row flex-wrap mb-6`}>
-            {users.map((u) => (
-              <TouchableOpacity
-                key={u.id}
-                style={tw`px-4 py-2 mr-2 mb-2 rounded ${
-                  selectedUsers.includes(u.name) ? 'bg-blue-500' : 'bg-gray-300'
-                }`}
-                onPress={() => {
-                  setSelectedUsers((sel) =>
-                    sel.includes(u.name)
-                      ? sel.filter((x) => x !== u.name)
-                      : [...sel, u.name]
-                  );
-                }}
-              >
-                <Text style={tw`text-white`}>{u.name}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {/* 確定ボタン */}
-          <View style={tw`items-center mb-6`}>
-            <View style={{ width: '50%' }}>
-              <Button
-                title={loading ? '...' : '確定'}
-                onPress={confirmAttendance}
-                disabled={loading}
-              />
-            </View>
-          </View>
-        </ScrollView>
-
-        {/* 右カラム：参加状況リスト */}
-        <ScrollView
-          style={{ width: width * 0.4, padding: 16 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadData} />}
-        >
-          <Text style={tw`text-2xl font-bold mb-4`}>参加状況</Text>
-          {records.map((rec) => (
-            <View key={rec.id} style={tw`border border-gray-300 rounded mb-4 p-3`}>
-              <Text style={tw`text-lg font-semibold mb-2`}>{rec.project}</Text>
-              {rec.users.length ? (
-                rec.users.map((u, i) => (
-                  <Text key={i} style={tw`mb-1`}>
-                    {u}
-                  </Text>
-                ))
-              ) : (
-                <Text style={tw`text-gray-500`}>参加者なし</Text>
-              )}
-              <View style={tw`flex-row justify-end mt-2`}>
-                <View style={tw`mr-2`}>
-                  <Button title="編集" onPress={() => editRecord(rec)} />
-                </View>
-                <Button title="削除" color="red" onPress={() => handleDelete(rec)} />
-              </View>
-            </View>
-          ))}
-        </ScrollView>
+      {/* ボタン配置 */}
+      <View style={tw`flex-row w-full mb-6`}>
+        <View style={tw`w-1/2 items-center`}>
+          <Button title="出勤" onPress={() => handlePunch('in')} />
+        </View>
+        <View style={tw`w-1/2 items-center`}>
+          <Button title="退勤" onPress={() => handlePunch('out')} />
+        </View>
       </View>
+
+      {/* 履歴 */}
+      <Text style={tw`text-lg font-medium px-4 mb-2`}>履歴</Text>
+      <FlatList
+        data={records}
+        keyExtractor={item => item.id}
+        renderItem={({ item }) => (
+          <View style={tw`bg-white px-4 py-2 border-b border-gray-200 flex-row justify-between items-center`}>
+            <Text style={tw`w-1/4`}>{item.type === 'in' ? '出勤' : '退勤'}</Text>
+            <TextInput
+              style={tw`border border-gray-300 p-1 w-16 text-center`}
+              keyboardType="number-pad"
+              value={formatHM(recordInputs[item.id] || '')}
+              onChangeText={text => setRecordInputs({ ...recordInputs, [item.id]: text.replace(/\D/g, '') })}
+              onEndEditing={() => handleSaveTime(item.id)}
+            />
+          </View>
+        )}
+      />
     </View>
   );
 }
