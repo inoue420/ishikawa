@@ -1,108 +1,49 @@
-// screens/SignInScreen.js
+// screens/phone/SignInScreen.js
 import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  KeyboardAvoidingView,
-  Platform,
-} from 'react-native';
-// ※実装時に以下を使います
-// import { auth } from '../firebaseConfig';
-// import { signInWithEmailAndPassword } from 'firebase/auth';
+import { View, Text, TextInput, Button, Alert, StyleSheet } from 'react-native';
+import { fetchUserByEmail } from '../../firestoreService';
 
 export default function SignInScreen({ navigation }) {
-  const [email,    setEmail]    = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleSignIn = () => {
-    // TODO: Firebase Auth 実装
-    // signInWithEmailAndPassword(auth, email.trim(), password)
-    //   .then(userCredential => { ... })
-    //   .catch(error => { ... });
+  const handleLogin = async () => {
+    const trimmed = email.trim().toLowerCase();
+    if (!trimmed) {
+      Alert.alert('入力エラー', 'メールアドレスを入力してください');
+      return;
+    }
+    setLoading(true);
+    const user = await fetchUserByEmail(trimmed);
+    setLoading(false);
+    if (user) {
+      navigation.replace('Main', { userEmail: trimmed });
+    } else {
+      Alert.alert('ログインエラー', '登録されていないメールアドレスです');
+    }
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.select({ ios: 'padding', android: undefined })}
-    >
-      <Text style={styles.title}>サインイン</Text>
-
+    <View style={styles.container}>
+      <Text style={styles.title}>ログイン</Text>
       <TextInput
         style={styles.input}
         placeholder="メールアドレス"
-        value={email}
-        onChangeText={setEmail}
         keyboardType="email-address"
         autoCapitalize="none"
+        value={email}
+        onChangeText={setEmail}
       />
-
-      <TextInput
-        style={styles.input}
-        placeholder="パスワード"
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
-      />
-
-      <TouchableOpacity style={styles.button} onPress={handleSignIn}>
-        <Text style={styles.buttonText}>サインイン</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={styles.linkContainer}
-        onPress={() => navigation.navigate('SignUp')}
-      >
-        <Text style={styles.linkText}>
-          アカウントをお持ちでない方はこちら
-        </Text>
-      </TouchableOpacity>
-    </KeyboardAvoidingView>
+      <Button title={loading ? '確認中…' : 'ログイン'} onPress={handleLogin} disabled={loading} />
+      <View style={{ marginTop: 16 }}>
+        <Button title="新規登録はこちら" onPress={() => navigation.navigate('UserRegister')} />
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex:              1,
-    justifyContent:    'center',
-    paddingHorizontal: 24,
-    backgroundColor:   '#fff',
-  },
-  title: {
-    fontSize:      32,
-    fontWeight:    'bold',
-    textAlign:     'center',
-    marginBottom:  24,
-  },
-  input: {
-    height:           48,
-    borderColor:      '#ccc',
-    borderWidth:      1,
-    borderRadius:     4,
-    paddingHorizontal: 12,
-    marginBottom:     16,
-  },
-  button: {
-    height:           48,
-    borderRadius:     4,
-    backgroundColor:  '#007AFF',
-    justifyContent:   'center',
-    alignItems:       'center',
-    marginVertical:   12,
-  },
-  buttonText: {
-    color:    '#fff',
-    fontSize: 16,
-  },
-  linkContainer: {
-    marginTop: 16,
-    alignItems: 'center',
-  },
-  linkText: {
-    color:    '#007AFF',
-    fontSize: 14,
-  },
+  container: { flex: 1, padding: 16, justifyContent: 'center' },
+  title: { fontSize: 24, marginBottom: 16, textAlign: 'center' },
+  input: { borderWidth: 1, borderColor: '#ccc', padding: 8, marginBottom: 12, borderRadius: 4 },
 });

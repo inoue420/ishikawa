@@ -21,6 +21,7 @@ const attendanceCol      = collection(db, 'attendanceRecords');
 const materialsListCol   = collection(db, 'materialsList');
 const materialsRecCol    = collection(db, 'materialsRecords');
 const companyProfileCol  = collection(db, 'companyProfile');
+const employeesCol       = collection(db, "employees");
 
 /** ============================================
  * Company Profile (会社情報)
@@ -242,4 +243,24 @@ export async function updateMaterialUsage(usageId, quantity) {
 export async function deleteMaterialUsage(usageId) {
   const ref = doc(db, 'materialsUsage', usageId);
   return deleteDoc(ref);
+}
+
+/**
+ * 従業員を登録（管理者用）
+ * @param {{ email: string, name: string, affiliation: string, role: string }} data
+ */
+export async function registerUser(data) {
+  const ref = doc(employeesCol, data.email);
+  await setDoc(ref, data);
+}
+
+/**
+ * メールアドレスで従業員を取得
+ * @param {string} email
+ * @returns {object|null}
+ */
+export async function fetchUserByEmail(email) {
+  const lower = email.toLowerCase();
+  const snap = await getDoc(doc(employeesCol, lower));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 }
