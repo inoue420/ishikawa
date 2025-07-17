@@ -26,6 +26,10 @@ import {
 import { db } from '../../firebaseConfig';
 
 export default function AttendanceScreen({ route }) {
+
+  console.log('[AttendanceScreen] route.params:', route.params);
+  console.log('[AttendanceScreen] route.params.userEmail:', route.params?.userEmail);
+
   const userEmail = route.params?.userEmail ?? 'admin';
   const { date: selectedDate, setDate } = useContext(DateContext);
   const [userName, setUserName] = useState('');
@@ -38,7 +42,9 @@ export default function AttendanceScreen({ route }) {
   // ユーザー名ロード
   useEffect(() => {
     (async () => {
+      console.log('[AttendanceScreen] fetching user by email:', userEmail);
       const user = await fetchUserByEmail(userEmail);
+      console.log('[AttendanceScreen] fetched user:', user);
       setUserName(user?.name ?? userEmail);
     })();
   }, [userEmail]);

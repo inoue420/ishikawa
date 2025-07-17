@@ -12,7 +12,8 @@ import ProfileStackScreen   from '../screens/phone/ProfileStackScreen';
 
 const Tab = createBottomTabNavigator();
 
-export default function PhoneNavigator() {
+export default function PhoneNavigator( { userEmail } ) {
+  console.log('[PhoneNavigator] props.userEmail:', userEmail);
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -34,7 +35,7 @@ export default function PhoneNavigator() {
       })}
     >
       <Tab.Screen name="Home"       component={HomeStackNavigator} />
-      <Tab.Screen name="Attendance" component={AttendanceScreen} />
+      <Tab.Screen name="Attendance" component={AttendanceScreen}   initialParams={{ userEmail }} />
       <Tab.Screen name="Materials"  component={MaterialsScreen} />
       <Tab.Screen name="WIP"        component={WIPScreen} />
       <Tab.Screen name="Billing"    component={BillingScreen} />
