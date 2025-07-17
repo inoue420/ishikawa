@@ -33,6 +33,9 @@ export default function ProjectRegisterScreen() {
   const [endDate, setEndDate] = useState(new Date());
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
+  // 新規登録フォーム用
+  const [showStartTimePicker, setShowStartTimePicker] = useState(false);
+  const [showEndTimePicker, setShowEndTimePicker] = useState(false);
 
   const [editingIndex, setEditingIndex] = useState(-1);
   const [editClient, setEditClient] = useState('');
@@ -40,6 +43,9 @@ export default function ProjectRegisterScreen() {
   const [editEnd, setEditEnd] = useState(new Date());
   const [showEditStart, setShowEditStart] = useState(false);
   const [showEditEnd, setShowEditEnd] = useState(false);
+  // 編集フォーム用
+  const [showEditStartTimePicker, setShowEditStartTimePicker] = useState(false);
+  const [showEditEndTimePicker, setShowEditEndTimePicker] = useState(false);
 
   const loadProjects = useCallback(async () => {
     setLoading(true);
@@ -157,6 +163,27 @@ export default function ProjectRegisterScreen() {
         {showStartPicker && (
           <DateTimePicker value={startDate} mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'} onChange={(_, d) => { setShowStartPicker(false); if (d) setStartDate(d); }} />
         )}
+                {/* 開始予定時刻 */}
+        <Text>開始予定時刻</Text>
+        <TouchableOpacity onPress={() => setShowStartTimePicker(true)} style={tw`border p-2 mb-2`}>
+          <Text>{startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+        </TouchableOpacity>
+        {showStartTimePicker && (
+          <DateTimePicker
+            value={startDate}
+            mode="time"
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            onChange={(_, t) => {
+              setShowStartTimePicker(false);
+              if (t) {
+                const d = new Date(startDate);
+                d.setHours(t.getHours(), t.getMinutes());
+                setStartDate(d);
+              }
+            }}
+          />
+        )}
+
 
         <Text style={tw`mb-2 font-semibold`}>終了予定日</Text>
         <TouchableOpacity style={tw`bg-white p-4 rounded mb-6 border border-gray-300`} onPress={() => setShowEndPicker(true)}>
@@ -165,6 +192,28 @@ export default function ProjectRegisterScreen() {
         {showEndPicker && (
           <DateTimePicker value={endDate} mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'} onChange={(_, d) => { setShowEndPicker(false); if (d) setEndDate(d); }} />
         )}
+                {/* 修了予定時刻 */}
+        <Text>終了予定時刻</Text>
+        <TouchableOpacity onPress={() => setShowEndTimePicker(true)} style={tw`border p-2 mb-2`}>
+          <Text>{endDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+        </TouchableOpacity>
+        {showEndTimePicker && (
+          <DateTimePicker
+            value={endDate}
+            mode="time"
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            onChange={(_, t) => {
+              setShowEndTimePicker(false);
+              if (t) {
+                const d = new Date(endDate);
+                d.setHours(t.getHours(), t.getMinutes());
+                setEndDate(d);
+              }
+            }}
+          />
+        )}
+
+
 
         <View style={tw`items-center mb-6`}>
           <View style={{ width: '50%' }}>
@@ -207,6 +256,25 @@ export default function ProjectRegisterScreen() {
                   {showEditStart && (
                     <DateTimePicker value={editStart} mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'} onChange={(_, d) => { setShowEditStart(false); if (d) setEditStart(d); }} />
                   )}
+                  <Text>開始予定時刻</Text>
+                  <TouchableOpacity onPress={() => setShowEditStartTimePicker(true)} style={tw`border p-2 mb-2`}>
+                    <Text>{editStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+                  </TouchableOpacity>
+                  {showEditStartTimePicker && (
+                    <DateTimePicker
+                      value={editStart}
+                      mode="time"
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={(_, t) => {
+                        setShowEditStartTimePicker(false);
+                        if (t) {
+                          const d = new Date(editStart);
+                          d.setHours(t.getHours(), t.getMinutes());
+                          setEditStart(d);
+                        }
+                      }}
+                    />
+                  )}
 
                   <Text style={tw`mb-2`}>終了予定日</Text>
                   <TouchableOpacity style={tw`bg-white p-2 rounded mb-4 border border-gray-300`} onPress={() => setShowEditEnd(true)}>
@@ -215,6 +283,27 @@ export default function ProjectRegisterScreen() {
                   {showEditEnd && (
                     <DateTimePicker value={editEnd} mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'} onChange={(_, d) => { setShowEditEnd(false); if (d) setEditEnd(d); }} />
                   )}
+                  <Text>終了予定時刻</Text>
+                  <TouchableOpacity onPress={() => setShowEditEndTimePicker(true)} style={tw`border p-2 mb-2`}>
+                    <Text>{editEnd.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+                  </TouchableOpacity>
+                  {showEditEndTimePicker && (
+                    <DateTimePicker
+                      value={editEnd}
+                      mode="time"
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={(_, t) => {
+                        setShowEditEndTimePicker(false);
+                        if (t) {
+                          const d = new Date(editEnd);
+                          d.setHours(t.getHours(), t.getMinutes());
+                          setEditEnd(d);
+                        }
+                      }}
+                    />
+                  )}
+
+                  
 
                   <View style={tw`flex-row justify-between`}>
                     <View style={{ width: '45%' }}>
