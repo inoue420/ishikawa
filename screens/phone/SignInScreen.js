@@ -1,6 +1,15 @@
 // screens/phone/SignInScreen.js
 import React, { useState } from 'react';
-import { View, Text, TextInput, Button, Alert, StyleSheet } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  View,
+  Text,
+  TextInput,
+  Button,
+  Alert,
+  StyleSheet,
+} from 'react-native';
 import { fetchUserByEmail } from '../../firestoreService';
 
 export default function SignInScreen({ navigation }) {
@@ -13,9 +22,11 @@ export default function SignInScreen({ navigation }) {
       Alert.alert('入力エラー', 'メールアドレスを入力してください');
       return;
     }
+
     setLoading(true);
     const user = await fetchUserByEmail(trimmed);
     setLoading(false);
+
     if (user) {
       navigation.replace('Main', { userEmail: trimmed });
     } else {
@@ -24,26 +35,46 @@ export default function SignInScreen({ navigation }) {
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>ログイン</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="メールアドレス"
-        keyboardType="email-address"
-        autoCapitalize="none"
-        value={email}
-        onChangeText={setEmail}
-      />
-      <Button title={loading ? '確認中…' : 'ログイン'} onPress={handleLogin} disabled={loading} />
-      <View style={{ marginTop: 16 }}>
-        <Button title="新規登録はこちら" onPress={() => navigation.navigate('UserRegister')} />
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={80}
+    >
+      <View style={styles.inner}>
+        <Text style={styles.title}>ログイン</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="メールアドレス"
+          value={email}
+          onChangeText={setEmail}
+          keyboardType="email-address"
+          autoCapitalize="none"
+        />
+        <Button title={loading ? '...' : 'ログイン'} onPress={handleLogin} />
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, justifyContent: 'center' },
-  title: { fontSize: 24, marginBottom: 16, textAlign: 'center' },
-  input: { borderWidth: 1, borderColor: '#ccc', padding: 8, marginBottom: 12, borderRadius: 4 },
+  container: {
+    flex: 1,
+  },
+  inner: {
+    flex: 1,
+    padding: 16,
+    justifyContent: 'center',
+  },
+  title: {
+    fontSize: 24,
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#ccc',
+    padding: 8,
+    marginBottom: 12,
+    borderRadius: 4,
+  },
 });
