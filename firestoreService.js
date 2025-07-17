@@ -87,35 +87,6 @@ export async function deleteProject(projectId) {
   return deleteDoc(docRef);
 }
 
-/** ============================================
- * Attendance Records (勤怠レコード)
- * ============================================ */
-export async function fetchAttendanceRecords(targetDate = null) {
-  let q = attendanceCol;
-  if (targetDate) {
-    const dateStr = targetDate.toISOString().slice(0, 10);
-    q = query(attendanceCol, where('dateStr', '==', dateStr));
-  }
-  const snaps = await getDocs(q);
-  return snaps.docs.map(d => ({ id: d.id, ...d.data() }));
-}
-export async function addAttendanceRecord(recordData) {
-  const date = recordData.date instanceof Date
-    ? recordData.date
-    : recordData.date.toDate();
-  const dataToSave = {
-    project: recordData.project,
-    date: Timestamp.fromDate(date),
-    dateStr: date.toISOString().slice(0, 10),
-    users: recordData.users,
-  };
-  const ref = await addDoc(attendanceCol, dataToSave);
-  return ref.id;
-}
-export async function deleteAttendanceRecord(recordId) {
-  const ref = doc(attendanceCol, recordId);
-  return deleteDoc(ref);
-}
 
 /** ============================================
  * Materials List (資材マスタ)
@@ -282,53 +253,34 @@ export async function deleteUser(email) {
   return deleteDoc(ref);
 }
 
- /**
-  * 指定社員・日付の勤怠レコードを取得
-  * @param {string} employeeId
-  * @param {string} dateStr YYYY-MM-DD
-  * @returns {Promise<Array<{ id: string, type: 'in'|'out', timestamp: Date }>>}
-  */
- export async function fetchAttendanceByEmployeeAndDate(employeeId, dateStr) {
-   const q = query(
-     attendanceCol,
-     where('employeeId', '==', employeeId),
-     where('date', '==', dateStr)
-   );
-   const snaps = await getDocs(q);
-   return snaps.docs.map(d => ({
-     id: d.id,
-     type: d.data().type,
-     timestamp: d.data().timestamp.toDate(),
-   }));
- }
+/**
+ * 指定社員・日付の勤怠レコードを取得
+ * @param {string} employeeId
+ * @param {string} dateStr YYYY-MM-DD
+ * @returns {Promise<Array<{ id: string, type: 'in'|'out', timestamp: Date }>>}
+ */
+export async function fetchAttendanceByEmployeeAndDate(employeeId, dateStr) {
+  const q = query(
+    attendanceCol,
+    where('employeeId', '==', employeeId),
+    where('date', '==', dateStr)
+  );
+  const snaps = await getDocs(q);
+  return snaps.docs.map(d => ({
+    id: d.id,
+    type: d.data().type,
+    timestamp: d.data().timestamp.toDate(),
+  }));
+}
 
- /**
-  * 出退勤打刻（upsert）
-  * @param {string} employeeId
-  * @param {string} dateStr YYYY-MM-DD
-  * @param {'in'|'out'} type
-  * @param {Date} time
-  */
- export async function upsertAttendance(employeeId, dateStr, type, time) {
-   const existing = await fetchAttendanceByEmployeeAndDate(employeeId, dateStr);
-   const ts = Timestamp.fromDate(time);
-   if (existing.length) {
-     // 先頭レコードを更新
-     const ref = doc(attendanceCol, existing[0].id);
-     return updateDoc(ref, { timestamp: ts });
-   } else {
-     // 新規作成
-     return addDoc(attendanceCol, { employeeId, date: dateStr, type, timestamp: ts });
-   }
- }
-
- /**
-  * 指定社員の指定期間の勤怠履歴を取得
-  * @param {string} employeeId
-  * @param {string} startDate YYYY-MM-DD
-  * @param {string} endDate YYYY-MM-DD
-  * @returns {Promise<Array<{ date: string, in?: Date, out?: Date }>>}
-  */
+/**
+ * 出退勤打刻（upsert）
+ * 既存レコードがあれば timestamp 更新、なければ新規作成
+ * @param {string} employeeId
+ * @param {string} dateStr YYYY-MM-DD
+ * @param {'in'|'out'} type
+ * @param {Date} time
+ */
 export async function upsertAttendance(employeeId, dateStr, type, time) {
   const q = query(
     attendanceCol,
@@ -339,7 +291,7 @@ export async function upsertAttendance(employeeId, dateStr, type, time) {
   const snaps = await getDocs(q);
   const nowStamp = Timestamp.fromDate(time);
   if (!snaps.empty) {
-    // 最初の1件を更新
+    // 既存レコードを更新
     const ref = snaps.docs[0].ref;
     return updateDoc(ref, { timestamp: nowStamp });
   } else {
@@ -351,4 +303,28 @@ export async function upsertAttendance(employeeId, dateStr, type, time) {
       timestamp: nowStamp,
     });
   }
+}
+
+/**
+ * 指定社員の指定期間の勤怠履歴を取得
+ * @param {string} employeeId
+ * @param {string} startDate YYYY-MM-DD
+ * @param {string} endDate YYYY-MM-DD
+ * @returns {Promise<Array<{ date: string, in?: Date, out?: Date }>>}
+ */
+export async function fetchAttendanceHistory(employeeId, startDate, endDate) {
+  const q = query(
+    attendanceCol,
+    where('employeeId', '==', employeeId),
+    where('date', '>=', startDate),
+    where('date', '<=', endDate)
+  );
+  const snaps = await getDocs(q);
+  const map = {};
+  snaps.docs.forEach(d => {
+    const { date, type, timestamp } = d.data();
+    if (!map[date]) map[date] = { date };
+    map[date][type] = timestamp.toDate();
+  });
+  return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
 }
