@@ -11,6 +11,7 @@ import {
   query,
   where,
   Timestamp,
+  serverTimestamp,        
 } from 'firebase/firestore';
 import { db } from './firebaseConfig';
 
@@ -86,6 +87,54 @@ export async function deleteProject(projectId) {
   const docRef = doc(projectsCol, projectId);
   return deleteDoc(docRef);
 }
+ export async function fetchBillings(projectId) {
+   const colRef = collection(db, 'projects', projectId, 'billings');
+   const snap   = await getDocs(colRef);
+   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+ }
+ /** 新しい請求（マイルストーン）を追加 */
+ export async function addBillingEntry(projectId, { stage, amount }) {
+   const colRef = collection(db, 'projects', projectId, 'billings');
+   return await addDoc(colRef, {
+     stage,
+     amount,
+     status: 'pending',
+     createdAt: serverTimestamp(),
+   });
+ }
+ /** マイルストーン請求ステータスを更新 */
+ export async function updateBillingStatus(projectId, billingId, newStatus) {
+   const docRef = doc(db, 'projects', projectId, 'billings', billingId);
+   const payload = { status: newStatus };
+   
+   // 発行/入金日時をサーバータイムスタンプで自動設定
+   if (newStatus === 'issued') payload.issuedAt = serverTimestamp();
+   if (newStatus === 'paid')   payload.paidAt   = serverTimestamp();
+   return await updateDoc(docRef, payload);
+ }
+export async function updateBillingAmount(projectId, billingId, amount) {
+  const docRef = doc(db, 'projects', projectId, 'billings', billingId);
+  return updateDoc(docRef, { amount });
+}
+
+/** ── 新規：請求金額更新（通常フロー） */
+export async function updateProjectInvoice(projectId, { amount, newStatus }) {
+  const ref = doc(db, 'projects', projectId);
+  const payload = {
+    invoiceAmount: amount,
+    invoiceStatus: newStatus,
+    // paid になったら最終完了フラグも立てるなら
+    ...(newStatus === 'paid' && { status: 'completed' }),
+  };
+  return updateDoc(ref, payload);
+}
+
+/** ── 新規：請求方式切替 */
+export async function updateProjectBillingType(projectId, isMilestoneBilling) {
+  const ref = doc(db, 'projects', projectId);
+  return updateDoc(ref, { isMilestoneBilling });
+}
+
 
 
 /** ============================================

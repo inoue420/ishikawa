@@ -80,6 +80,7 @@ export default function ProjectRegisterScreen() {
         clientName: clientName.trim(),
         startDate,
         endDate,
+        isMilestoneBilling: false, 
       });
       setName('');
       setClientName('');
@@ -106,6 +107,7 @@ export default function ProjectRegisterScreen() {
         clientName: editClient.trim(),
         startDate: editStart,
         endDate: editEnd,
+        isMilestoneBilling: proj.isMilestoneBilling,
       });
       setEditingIndex(-1);
       await loadProjects();

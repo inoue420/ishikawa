@@ -1,117 +1,263 @@
-// screens/WIPScreen.js
-
 import React, { useEffect, useState } from 'react';
 import {
-  View,
-  Text,
-  TextInput,
-  Button,
-  FlatList,
-  Alert,
+  View, Text, TextInput, Button,
+  ActivityIndicator, FlatList, TouchableOpacity
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import tw from 'twrnc';
+import {
+  fetchProjects,
+  updateProjectInvoice,
+  updateProjectBillingType,
+  fetchBillings,
+  addBillingEntry,
+  updateBillingStatus,
+  updateBillingAmount,
+} from '../../firestoreService';
 
 export default function WIPScreen() {
-  const STORAGE_KEY = '@wip_records';
-  const [records, setRecords] = useState([]);
-  const [site, setSite] = useState('');
-  const [task, setTask] = useState('');
-  const [assignee, setAssignee] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading]   = useState(true);
+  const [projects, setProjects] = useState([]);
+  const [billingsMap, setBillingsMap] = useState({});
+  const [inputs, setInputs]     = useState({});
+  const [billingInputsMap, setBillingInputsMap] = useState({});
 
-  // 初期ロード
+  // ── ① 画面立ち上げ時に WIP 一覧を取得
   useEffect(() => {
     (async () => {
-      try {
-        const data = await AsyncStorage.getItem(STORAGE_KEY);
-        if (data) setRecords(JSON.parse(data));
-      } catch (e) {
-        console.error('AsyncStorage load error', e);
+      setLoading(true);
+      const all = await fetchProjects();
+      const wip = [];
+
+      for (const p of all) {
+        if (!p.isMilestoneBilling) {
+          if (p.invoiceStatus !== 'paid') wip.push(p);
+        } else {
+          const bs = await fetchBillings(p.id);
+         // 初期入力値を Firestore 上の amount で設定
+
+         setBillingInputsMap(m => ({
+           ...m,
+           [p.id]: bs.reduce((acc, b) => ({
+             ...acc,
+             [b.id]: b.amount?.toString() || ''
+           }), m[p.id] || {})
+         }));
+
+          if (bs.some(b => b.status !== 'paid')) {
+            wip.push(p);
+            setBillingsMap(m => ({ ...m, [p.id]: bs }));
+          }
+        }
       }
+      wip.sort((a, b) => a.endDate.toDate() - b.endDate.toDate());
+      setProjects(wip);
+      setLoading(false);
     })();
   }, []);
 
-  // 保存
-  const saveRecords = async (newRecords) => {
+  const pToDate = ts => ts.toDate ? ts.toDate() : new Date(ts);
+
+  // ── ② 通常請求：請求書発行
+  const onInvoice = async projId => {
     try {
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(newRecords));
+      const amt = Number(inputs[projId] || 0);
+      if (!amt) return alert('金額を入力してください');
+      await updateProjectInvoice(projId, { amount: amt, newStatus: 'issued' });
+      setProjects(ps =>
+        ps.map(p =>
+          p.id === projId
+            ? { ...p, invoiceAmount: amt, invoiceStatus: 'issued' }
+            : p
+        )
+      );
     } catch (e) {
-      console.error('AsyncStorage save error', e);
+      console.error(e);
+      alert('請求処理に失敗しました');
     }
   };
 
-  // レコード追加
-  const handleAdd = async () => {
-    if (!site.trim() || !task.trim() || !assignee.trim()) {
-      Alert.alert('入力エラー', '現場名、作業項目、担当者をすべて入力してください');
-      return;
+  // ── ③ 通常請求：入金確認
+  const onPaid = async projId => {
+    try {
+      const amt = Number(inputs[projId] || 0);
+      await updateProjectInvoice(projId, { amount: amt, newStatus: 'paid' });
+      setProjects(ps => ps.filter(p => p.id !== projId));
+    } catch (e) {
+      console.error(e);
+      alert('入金処理に失敗しました');
     }
-    setLoading(true);
-    const timestamp = new Date().toISOString();
-    const newRecord = { site, task, assignee, timestamp };
-    const updated = [newRecord, ...records];
-    setRecords(updated);
-    await saveRecords(updated);
-    Alert.alert('成功', 'WIP を追加しました');
-    setSite('');
-    setTask('');
-    setAssignee('');
-    setLoading(false);
   };
 
-  // レンダラー
-  const renderItem = ({ item }) => (
-    <View style={tw`bg-white p-3 rounded mb-2`}>
-      <Text style={tw`font-bold`}>{item.site}</Text>
-      <Text>作業: {item.task}</Text>
-      <Text>担当: {item.assignee}</Text>
-      <Text style={tw`text-sm text-gray-500`}>
-        {new Date(item.timestamp).toLocaleString()}
-      </Text>
-    </View>
-  );
+  // ── ④ 請求方式切替
+ const onToggleBilling = async (projId, currentType) => {
+   try {
+     // Firestore 上のフラグ切替
+     await updateProjectBillingType(projId, !currentType);
+
+     // UI 側ステートも切替
+     setProjects(ps =>
+       ps.map(p =>
+         p.id === projId
+           ? { ...p, isMilestoneBilling: !currentType }
+           : p
+       )
+     );
+
+     // 「通常 → 出来高」に切り替えた場合のみ、
+     // 既存の請求エントリを取得してマップを初期化
+     if (!currentType) {
+       const bs = await fetchBillings(projId);
+       // エントリ一覧
+       setBillingsMap(m => ({ ...m, [projId]: bs }));
+       // 入力欄の初期値マップ
+       setBillingInputsMap(prev => ({
+         ...prev,
+         [projId]: bs.reduce((acc, b) => ({
+           ...acc,
+           [b.id]: b.amount?.toString() || ''
+         }), {})
+       }));
+     }
+   } catch (e) {
+     console.error(e);
+     alert('切替に失敗しました');
+   }
+ };
+
+  // ── ⑤ マイル請求：請求／入金
+  const onBillingAction = async (projId, bill) => {
+    try {
+     if (bill.status === 'pending') {
+       // 入力中の金額を取得
+       const amt = Number(billingInputsMap[projId]?.[bill.id] || 0);
+       // 金額保存
+       await updateBillingAmount(projId, bill.id, amt);
+       // ステータスを発行へ
+       await updateBillingStatus(projId, bill.id, 'issued');
+     } else {
+       // 入金へ
+       await updateBillingStatus(projId, bill.id, 'paid');
+     }
+      const next = bill.status === 'pending' ? 'issued' : 'paid';
+      await updateBillingStatus(projId, bill.id, next);
+      setBillingsMap(m => {
+        const updated = m[projId].map(b =>
+          b.id === bill.id ? { ...b, status: next } : b
+        );
+        return { ...m, [projId]: updated };
+      });
+      // 全て paid なら一覧から除外
+      const remaining = billingsMap[projId].filter(b => b.status !== 'paid' && b.id!==bill.id);
+      if (remaining.length === 0) {
+        setProjects(ps => ps.filter(p => p.id !== projId));
+      }
+    } catch (e) {
+      console.error(e);
+      alert('マイルストーン処理に失敗しました');
+    }
+  };
+
+  // ── ⑥ マイル請求：追加
+  const onAddMilestone = async projId => {
+    try {
+      const nextStage = (billingsMap[projId]?.length || 0) + 1;
+      await addBillingEntry(projId, { stage: nextStage, amount: 0 });
+      const bs = await fetchBillings(projId);
+    setBillingsMap(m => ({ ...m, [projId]: bs }));
+
+    // ── ここで入力用マップも再生成
+    setBillingInputsMap(prev => ({
+      ...prev,
+      [projId]: bs.reduce((acc, b) => ({
+        ...acc,
+        // 既存の入力値があれば優先、なければ Firestore 上の amount を文字列化
+        [b.id]: prev[projId]?.[b.id] ?? b.amount?.toString() ?? ''
+      }), {})
+    }));
+    } catch (e) {
+      console.error(e);
+      alert('追加に失敗しました');
+    }
+  };
+
+  if (loading) return <ActivityIndicator style={tw`flex-1`} />;
 
   return (
-    <View style={tw`flex-1 bg-gray-100 p-4`}>
-      <Text style={tw`text-xl font-bold mb-4`}>仕掛管理 (WIP)</Text>
+    <FlatList
+      data={projects}
+      keyExtractor={p => p.id}
+      contentContainerStyle={tw`p-4 bg-gray-100`}
+      renderItem={({ item: p }) => (
+        <View style={tw`mb-4 bg-white p-4 rounded-lg shadow`}>
+          <Text style={tw`text-lg font-bold mb-1`}>{p.name}</Text>
+          <Text>顧客: {p.clientName}</Text>
+          <Text>終了予定: {pToDate(p.endDate).toISOString().slice(0,10)}</Text>
 
-      {/* 入力フォーム */}
-      <TextInput
-        style={tw`border border-gray-300 p-2 mb-2 rounded`}
-        placeholder="現場名"
-        value={site}
-        onChangeText={setSite}
-      />
-      <TextInput
-        style={tw`border border-gray-300 p-2 mb-2 rounded`}
-        placeholder="作業項目"
-        value={task}
-        onChangeText={setTask}
-      />
-      <TextInput
-        style={tw`border border-gray-300 p-2 mb-4 rounded`}
-        placeholder="担当者"
-        value={assignee}
-        onChangeText={setAssignee}
-      />
-      <Button
-        title={loading ? '...' : '追加'}
-        onPress={handleAdd}
-        disabled={loading}
-      />
+          {/* ← 請求方式切替ボタン */}
+          <View style={tw`mt-2 mb-4`}>
+            <Button
+              title={p.isMilestoneBilling ? '通常請求に切替' : '出来高請求に切替'}
+              onPress={() => onToggleBilling(p.id, p.isMilestoneBilling)}
+            />
+          </View>
 
-      {/* レコードリスト */}
-      <Text style={tw`text-lg font-semibold mt-6 mb-2`}>履歴</Text>
-      {records.length === 0 ? (
-        <Text style={tw`text-center text-gray-500`}>記録がありません</Text>
-      ) : (
-        <FlatList
-          data={records}
-          keyExtractor={(_, i) => i.toString()}
-          renderItem={renderItem}
-        />
+          {!p.isMilestoneBilling ? (
+            <>
+              <TextInput
+                style={tw`border p-2 my-2`}
+                placeholder="請求金額を入力"
+                keyboardType="numeric"
+                value={inputs[p.id]?.toString() || ''}
+                onChangeText={v => setInputs(i => ({ ...i, [p.id]: v }))}
+              />
+              <Button title="請求書発行" onPress={() => onInvoice(p.id)} />
+              {p.invoiceStatus === 'issued' && (
+                <View style={tw`mt-2`}>
+                  <Button title="入金確認" onPress={() => onPaid(p.id)} />
+                </View>
+              )}
+            </>
+          ) : (
+            <>
+              <Text style={tw`mt-2 font-bold`}>マイルストーン請求</Text>
+              {(billingsMap[p.id] || []).map(b => (
+                <View key={b.id} style={tw`mt-2 p-2 border rounded`}>
+                  <Text>出来高 {b.stage}</Text>
+                 {/* 金額入力欄 */}
+                 {b.status === 'pending' && (
+                   <TextInput
+                     style={tw`border p-2 my-1`}
+                     placeholder="金額を入力"
+                     keyboardType="numeric"
+                     value={billingInputsMap[p.id]?.[b.id]}
+                     onChangeText={v =>
+                       setBillingInputsMap(prev => ({
+                         ...prev,
+                         [p.id]: { ...prev[p.id], [b.id]: v }
+                       }))
+                     }
+                   />
+                 )}                  
+                  <Text>金額: {b.amount}</Text>
+                  <Text>状態: {b.status}</Text>
+                  {b.status !== 'paid' && (
+                    <Button
+                      title={b.status === 'pending' ? '請求書発行' : '入金確認'}
+                      onPress={() => onBillingAction(p.id, b)}
+                    />
+                  )}
+                </View>
+              ))}
+              <TouchableOpacity
+                style={tw`mt-2 px-4 py-2 bg-blue-200 rounded`}
+                onPress={() => onAddMilestone(p.id)}
+              >
+                <Text>次の出来高追加</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
       )}
-    </View>
-);
+    />
+  );
 }
