@@ -12,6 +12,7 @@ import {
   addBillingEntry,
   updateBillingStatus,
   updateBillingAmount,
+  deleteBillingEntry, 
 } from '../../firestoreService';
 
 export default function WIPScreen() {
@@ -27,26 +28,19 @@ export default function WIPScreen() {
       setLoading(true);
       const all = await fetchProjects();
       const wip = [];
-
       for (const p of all) {
-        if (!p.isMilestoneBilling) {
-          if (p.invoiceStatus !== 'paid') wip.push(p);
-        } else {
+        wip.push(p);
+        if (p.isMilestoneBilling) {
           const bs = await fetchBillings(p.id);
-         // 初期入力値を Firestore 上の amount で設定
-
-         setBillingInputsMap(m => ({
-           ...m,
-           [p.id]: bs.reduce((acc, b) => ({
-             ...acc,
-             [b.id]: b.amount?.toString() || ''
-           }), m[p.id] || {})
-         }));
-
-          if (bs.some(b => b.status !== 'paid')) {
-            wip.push(p);
-            setBillingsMap(m => ({ ...m, [p.id]: bs }));
-          }
+          // マイルストーン請求のデータを初期化
+          setBillingsMap(m => ({ ...m, [p.id]: bs }));
+          setBillingInputsMap(prev => ({
+            ...prev,
+            [p.id]: bs.reduce((acc, b) => ({
+              ...acc,
+              [b.id]: b.amount?.toString() || ''
+            }), {})
+          }));
         }
       }
       wip.sort((a, b) => a.endDate.toDate() - b.endDate.toDate());
@@ -103,18 +97,19 @@ export default function WIPScreen() {
        )
      );
 
-     // 「通常 → 出来高」に切り替えた場合のみ、
-     // 既存の請求エントリを取得してマップを初期化
+     // 「通常 → 出来高」に切り替えた直後は
+     // 必ずマイルストーン1件目を含む請求エントリを取得し、
+     // billingsMap と billingInputsMap を初期化する
      if (!currentType) {
        const bs = await fetchBillings(projId);
-       // エントリ一覧
+       // エントリ一覧を WIP に表示
        setBillingsMap(m => ({ ...m, [projId]: bs }));
-       // 入力欄の初期値マップ
+       // 入力用マップにも空文字 or 既存 amount をセット
        setBillingInputsMap(prev => ({
          ...prev,
          [projId]: bs.reduce((acc, b) => ({
            ...acc,
-           [b.id]: b.amount?.toString() || ''
+           [b.id]: prev[projId]?.[b.id] ?? b.amount?.toString() ?? ''
          }), {})
        }));
      }
@@ -181,6 +176,25 @@ export default function WIPScreen() {
   };
 
   if (loading) return <ActivityIndicator style={tw`flex-1`} />;
+  const onDeleteBilling = async (projId, billingId) => {
+    try {
+      await deleteBillingEntry(projId, billingId);
+      // ローカル state からも削除
+      setBillingsMap(m => ({
+        ...m,
+        [projId]: (m[projId] || []).filter(b => b.id !== billingId)
+      }));
+      setBillingInputsMap(prev => {
+        const { [billingId]: _, ...rest } = prev[projId] || {};
+        return { ...prev, [projId]: rest };
+      });
+    } catch (e) {
+      console.error(e);
+      alert('請求エントリの削除に失敗しました');
+    }
+  };
+
+
 
   return (
     <FlatList
@@ -223,21 +237,19 @@ export default function WIPScreen() {
               {(billingsMap[p.id] || []).map(b => (
                 <View key={b.id} style={tw`mt-2 p-2 border rounded`}>
                   <Text>出来高 {b.stage}</Text>
-                 {/* 金額入力欄 */}
-                 {b.status === 'pending' && (
-                   <TextInput
-                     style={tw`border p-2 my-1`}
-                     placeholder="金額を入力"
-                     keyboardType="numeric"
-                     value={billingInputsMap[p.id]?.[b.id]}
-                     onChangeText={v =>
-                       setBillingInputsMap(prev => ({
-                         ...prev,
-                         [p.id]: { ...prev[p.id], [b.id]: v }
-                       }))
-                     }
-                   />
-                 )}                  
+                  {/* 金額は常に編集可能な入力欄で表示 */}
+                  <TextInput
+                    style={tw`border p-2 my-1`}
+                    placeholder="金額を入力"
+                    keyboardType="numeric"
+                    value={billingInputsMap[p.id]?.[b.id] ?? b.amount?.toString() ?? ''}
+                    onChangeText={v =>
+                      setBillingInputsMap(prev => ({
+                        ...prev,
+                        [p.id]: { ...prev[p.id], [b.id]: v }
+                      }))
+                    }
+                  />                                
                   <Text>金額: {b.amount}</Text>
                   <Text>状態: {b.status}</Text>
                   {b.status !== 'paid' && (
@@ -246,6 +258,14 @@ export default function WIPScreen() {
                       onPress={() => onBillingAction(p.id, b)}
                     />
                   )}
+                  {/* ── 追加：請求エントリ削除ボタン */}
+                  <View style={tw`mt-2`}>
+                    <Button
+                      title="削除"
+                      color="#f00"
+                      onPress={() => onDeleteBilling(p.id, b.id)}
+                    />
+                  </View>                  
                 </View>
               ))}
               <TouchableOpacity

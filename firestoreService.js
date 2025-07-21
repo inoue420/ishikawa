@@ -116,6 +116,10 @@ export async function updateBillingAmount(projectId, billingId, amount) {
   const docRef = doc(db, 'projects', projectId, 'billings', billingId);
   return updateDoc(docRef, { amount });
 }
+export async function deleteBillingEntry(projectId, billingId) {
+  const docRef = doc(db, 'projects', projectId, 'billings', billingId);
+  return deleteDoc(docRef);
+}
 
 /** ── 新規：請求金額更新（通常フロー） */
 export async function updateProjectInvoice(projectId, { amount, newStatus }) {
