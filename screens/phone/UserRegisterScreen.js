@@ -1,6 +1,6 @@
 // screens/phone/UserRegisterScreen.js
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, Button, Alert, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, TextInput, Button, Alert, ScrollView, StyleSheet, TouchableOpacity, Platform, ActionSheetIOS } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import {
   registerUser,
@@ -16,7 +16,7 @@ export default function UserRegisterScreen() {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [affiliation, setAffiliation] = useState('');
-  const [division, setDivision] = useState(''); // プルダウン選択値
+  const [division, setDivision] = useState(''); // 選択値
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [editingEmail, setEditingEmail] = useState(null);
@@ -34,6 +34,22 @@ export default function UserRegisterScreen() {
   useEffect(() => {
     loadUsers();
   }, []);
+
+  const openDivisionPickerIOS = () => {
+    const options = ['キャンセル', ...DIVISION_OPTIONS];
+    ActionSheetIOS.showActionSheetWithOptions(
+      {
+        options,
+        cancelButtonIndex: 0,
+        title: '区分を選択',
+      },
+      (buttonIndex) => {
+        if (buttonIndex === 0) return; // キャンセル
+        const chosen = DIVISION_OPTIONS[buttonIndex - 1];
+        setDivision(chosen);
+      }
+    );
+  };
 
   const handleSubmit = async () => {
     const addr = email.trim().toLowerCase();
@@ -74,7 +90,6 @@ export default function UserRegisterScreen() {
     setEmail(u.email);
     setName(u.name ?? '');
     setAffiliation(u.affiliation ?? '');
-    // 既存値が候補に無い場合は空にして再選択を促す
     const existing = u.division ?? '';
     setDivision(DIVISION_OPTIONS.includes(existing) ? existing : '');
   };
@@ -130,20 +145,28 @@ export default function UserRegisterScreen() {
         onChangeText={setAffiliation}
       />
 
-      {/* ▼ 区分（プルダウン） */}
       <Text style={styles.label}>区分</Text>
-      <View style={styles.pickerWrapper}>
-        <Picker
-          selectedValue={division}
-          onValueChange={(val) => setDivision(val)}
-          mode="dropdown" // Androidでドロップダウン表示
-        >
-          <Picker.Item label="選択してください" value="" enabled={true} />
-          {DIVISION_OPTIONS.map((opt) => (
-            <Picker.Item key={opt} label={opt} value={opt} />
-          ))}
-        </Picker>
-      </View>
+      {/* iOS: タップでアクションシート, Android: これまで通りPicker */}
+      {Platform.OS === 'ios' ? (
+        <TouchableOpacity style={styles.selectBox} onPress={openDivisionPickerIOS} activeOpacity={0.7}>
+          <Text style={[styles.selectBoxText, !division && styles.placeholderText]}>
+            {division || '選択してください'}
+          </Text>
+        </TouchableOpacity>
+      ) : (
+        <View style={styles.pickerWrapper}>
+          <Picker
+            selectedValue={division}
+            onValueChange={(val) => setDivision(val)}
+            mode="dropdown"
+          >
+            <Picker.Item label="選択してください" value="" enabled={true} />
+            {DIVISION_OPTIONS.map((opt) => (
+              <Picker.Item key={opt} label={opt} value={opt} />
+            ))}
+          </Picker>
+        </View>
+      )}
       {!division ? <Text style={styles.helper}>区分を選択してください</Text> : null}
 
       <Button
@@ -188,10 +211,22 @@ const styles = StyleSheet.create({
   heading: { fontSize: 20, marginBottom: 12, textAlign: 'center' },
   input: { borderWidth: 1, borderColor: '#ccc', padding: 8, marginBottom: 12, borderRadius: 4 },
   label: { marginBottom: 6, fontSize: 14, color: '#333' },
+
+  // iOS用の見た目（TextInputと同じ風）
+  selectBox: {
+    borderWidth: 1, borderColor: '#ccc', borderRadius: 4,
+    paddingVertical: 12, paddingHorizontal: 10, marginBottom: 12,
+    backgroundColor: '#fff',
+  },
+  selectBoxText: { fontSize: 16, color: '#333' },
+  placeholderText: { color: '#999' },
+
+  // Android用Pickerラッパー
   pickerWrapper: {
     borderWidth: 1, borderColor: '#ccc', borderRadius: 4,
     marginBottom: 12, overflow: 'hidden', backgroundColor: '#fff',
   },
+
   helper: { marginTop: -6, marginBottom: 12, color: '#999', fontSize: 12 },
   listHeading: { fontSize: 18, marginVertical: 16 },
   userRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
