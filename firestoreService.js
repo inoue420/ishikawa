@@ -408,3 +408,69 @@ export async function fetchAttendanceHistory(employeeId, startDate, endDate) {
   });
   return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
 }
+
+// ── 承認フロー：打刻申請（出勤/退勤）
+export async function requestPunch({ employeeId, dateStr, type, time }) {
+  const now = Timestamp.fromDate(time);
+  return addDoc(collection(db, "attendanceRecords"), {
+    employeeId,
+    date: dateStr,
+    type,               // "in" | "out"
+    timestamp: now,     // 初回打刻時刻を保持
+    status: "pending",
+    requestedAt: now,
+  });
+}
+
+// ── 上長: 自分の承認待ち一覧を取得（当日 or 期間指定）
+export async function fetchPendingForManager(managerEmail, { startDate, endDate }) {
+  // 1) まずは pending の打刻を期間で取る
+  let qAttendance = query(
+    collection(db, "attendanceRecords"),
+    where("status", "==", "pending"),
+    ...(startDate ? [where("date", ">=", startDate)] : []),
+    ...(endDate   ? [where("date", "<=", endDate)]   : []),
+  );
+  const snap = await getDocs(qAttendance);
+  const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  // 2) 各行の employeeId（メール）→ 従業員ドキュメントをJOIN
+  const results = [];
+  for (const r of rows) {
+    const emp = await fetchUserByEmail(r.employeeId); // 既存関数を利用
+    // managerEmail が一致するものだけ返す
+    if (emp && (emp.managerEmail || "").toLowerCase() === managerEmail.toLowerCase()) {
+      results.push({ ...r, employee: emp });
+    }
+  }
+  // sort: 日付→時刻→type(in優先)
+  results.sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    const ta = a.timestamp?.toDate?.() || new Date(a.timestamp);
+    const tb = b.timestamp?.toDate?.() || new Date(b.timestamp);
+    return ta - tb || (a.type === "in" ? -1 : 1);
+  });
+  return results;
+}
+
+// ── 上長: 承認
+export async function approvePunch(recordId, approverEmail) {
+  const ref = doc(db, "attendanceRecords", recordId);
+  return updateDoc(ref, {
+    status: "approved",
+    approverId: approverEmail,
+    approvedAt: serverTimestamp(),
+  });
+}
+
+// ── 上長: 却下（理由つき）
+export async function rejectPunch(recordId, approverEmail, note = "") {
+  const ref = doc(db, "attendanceRecords", recordId);
+  return updateDoc(ref, {
+    status: "rejected",
+    approverId: approverEmail,
+    approvedAt: serverTimestamp(),
+    note,
+  });
+}
+

@@ -1,6 +1,6 @@
 // screens/phone/UserRegisterScreen.js
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, Button, Alert, ScrollView, StyleSheet, TouchableOpacity, Platform, ActionSheetIOS } from 'react-native';
+import { View, Text, TextInput, Button, Alert, ScrollView, StyleSheet } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import {
   registerUser,
@@ -11,13 +11,18 @@ import {
 } from '../../firestoreService';
 
 const DIVISION_OPTIONS = ['外注', '社員', 'パート', 'アルバイト'];
+const ROLE_OPTIONS = ['manager', 'employee'];
 
 export default function UserRegisterScreen() {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [affiliation, setAffiliation] = useState('');
-  const [division, setDivision] = useState(''); // 選択値
+  const [division, setDivision] = useState('');
+  const [role, setRole] = useState('employee');
+  const [managerEmail, setManagerEmail] = useState('');
+
   const [users, setUsers] = useState([]);
+  const [managers, setManagers] = useState([]); // role === 'manager' の従業員一覧
   const [loading, setLoading] = useState(false);
   const [editingEmail, setEditingEmail] = useState(null);
 
@@ -25,41 +30,31 @@ export default function UserRegisterScreen() {
     try {
       const list = await fetchAllUsers();
       setUsers(list);
+      setManagers(list.filter(u => (u.role ?? 'employee') === 'manager'));
     } catch (e) {
       console.error(e);
       Alert.alert('エラー', '従業員リストの取得に失敗しました');
     }
   };
 
-  useEffect(() => {
-    loadUsers();
-  }, []);
-
-  const openDivisionPickerIOS = () => {
-    const options = ['キャンセル', ...DIVISION_OPTIONS];
-    ActionSheetIOS.showActionSheetWithOptions(
-      {
-        options,
-        cancelButtonIndex: 0,
-        title: '区分を選択',
-      },
-      (buttonIndex) => {
-        if (buttonIndex === 0) return; // キャンセル
-        const chosen = DIVISION_OPTIONS[buttonIndex - 1];
-        setDivision(chosen);
-      }
-    );
-  };
+  useEffect(() => { loadUsers(); }, []);
 
   const handleSubmit = async () => {
     const addr = email.trim().toLowerCase();
     if (!addr || !name.trim() || !affiliation.trim() || !division.trim()) {
-      return Alert.alert('入力エラー', 'すべての項目を入力してください');
+      return Alert.alert('入力エラー', '必須項目（メール・氏名・所属・区分）を入力してください');
     }
+    if (role === 'employee' && !managerEmail.trim()) {
+      return Alert.alert('入力エラー', '役割が従業員の場合は上長を選択してください');
+    }
+
     setLoading(true);
     try {
       if (editingEmail) {
-        await updateUser(editingEmail, { name, affiliation, division });
+        await updateUser(editingEmail, {
+          name, affiliation, division, role,
+          managerEmail: role === 'employee' ? managerEmail : '',
+        });
         Alert.alert('更新完了', `${editingEmail} の情報を更新しました`);
       } else {
         const exists = await fetchUserByEmail(addr);
@@ -68,13 +63,16 @@ export default function UserRegisterScreen() {
           setLoading(false);
           return;
         }
-        await registerUser({ email: addr, name, affiliation, division });
+        await registerUser({
+          email: addr, name, affiliation, division, role,
+          managerEmail: role === 'employee' ? managerEmail : '',
+        });
         Alert.alert('登録完了', `${addr} を従業員として登録しました`);
       }
-      setEmail('');
-      setName('');
-      setAffiliation('');
-      setDivision('');
+
+      // クリア
+      setEmail(''); setName(''); setAffiliation(''); setDivision('');
+      setRole('employee'); setManagerEmail('');
       setEditingEmail(null);
       await loadUsers();
     } catch (e) {
@@ -90,8 +88,9 @@ export default function UserRegisterScreen() {
     setEmail(u.email);
     setName(u.name ?? '');
     setAffiliation(u.affiliation ?? '');
-    const existing = u.division ?? '';
-    setDivision(DIVISION_OPTIONS.includes(existing) ? existing : '');
+    setDivision(u.division ?? '');
+    setRole(u.role ?? 'employee');
+    setManagerEmail(u.managerEmail ?? '');
   };
 
   const handleDelete = async (addr) => {
@@ -119,9 +118,7 @@ export default function UserRegisterScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.heading}>
-        {editingEmail ? '従業員情報編集' : '従業員登録'}
-      </Text>
+      <Text style={styles.heading}>{editingEmail ? '従業員情報編集' : '従業員登録'}</Text>
 
       <TextInput
         style={styles.input}
@@ -140,34 +137,50 @@ export default function UserRegisterScreen() {
       />
       <TextInput
         style={styles.input}
-        placeholder="所属"
+        placeholder="所属（会社名）"
         value={affiliation}
         onChangeText={setAffiliation}
       />
 
+      {/* 区分 */}
       <Text style={styles.label}>区分</Text>
-      {/* iOS: タップでアクションシート, Android: これまで通りPicker */}
-      {Platform.OS === 'ios' ? (
-        <TouchableOpacity style={styles.selectBox} onPress={openDivisionPickerIOS} activeOpacity={0.7}>
-          <Text style={[styles.selectBoxText, !division && styles.placeholderText]}>
-            {division || '選択してください'}
-          </Text>
-        </TouchableOpacity>
-      ) : (
-        <View style={styles.pickerWrapper}>
-          <Picker
-            selectedValue={division}
-            onValueChange={(val) => setDivision(val)}
-            mode="dropdown"
-          >
-            <Picker.Item label="選択してください" value="" enabled={true} />
-            {DIVISION_OPTIONS.map((opt) => (
-              <Picker.Item key={opt} label={opt} value={opt} />
-            ))}
-          </Picker>
-        </View>
+      <View style={styles.pickerWrapper}>
+        <Picker selectedValue={division} onValueChange={setDivision} mode="dropdown">
+          <Picker.Item label="選択してください" value="" />
+          {DIVISION_OPTIONS.map(opt => <Picker.Item key={opt} label={opt} value={opt} />)}
+        </Picker>
+      </View>
+
+      {/* 役割 */}
+      <Text style={styles.label}>役割</Text>
+      <View style={styles.pickerWrapper}>
+        <Picker selectedValue={role} onValueChange={(v) => setRole(v)} mode="dropdown">
+          {ROLE_OPTIONS.map(opt => <Picker.Item key={opt} label={opt} value={opt} />)}
+        </Picker>
+      </View>
+
+      {/* 上長（employee のみ表示） */}
+      {role === 'employee' && (
+        <>
+          <Text style={styles.label}>上長（manager）</Text>
+          <View style={styles.pickerWrapper}>
+            <Picker
+              selectedValue={managerEmail}
+              onValueChange={setManagerEmail}
+              mode="dropdown"
+            >
+              <Picker.Item label="選択してください" value="" />
+              {managers.map(m => (
+                <Picker.Item
+                  key={m.email}
+                  label={`${m.name ?? m.email}（${m.affiliation ?? '-'}）`}
+                  value={m.email}
+                />
+              ))}
+            </Picker>
+          </View>
+        </>
       )}
-      {!division ? <Text style={styles.helper}>区分を選択してください</Text> : null}
 
       <Button
         title={loading ? (editingEmail ? '更新中…' : '登録中…') : (editingEmail ? '更新' : '登録')}
@@ -177,23 +190,24 @@ export default function UserRegisterScreen() {
 
       {editingEmail && (
         <View style={styles.cancelButton}>
-          <Button
-            title="キャンセル"
-            onPress={() => {
-              setEditingEmail(null);
-              setEmail(''); setName(''); setAffiliation('');
-              setDivision('');
-            }}
-          />
+          <Button title="キャンセル" onPress={() => {
+            setEditingEmail(null);
+            setEmail(''); setName(''); setAffiliation(''); setDivision('');
+            setRole('employee'); setManagerEmail('');
+          }} />
         </View>
       )}
 
       <Text style={styles.listHeading}>登録済み従業員一覧</Text>
       {users.map((u) => (
         <View key={u.email} style={styles.userRow}>
-          <View>
+          <View style={{ flex: 1, paddingRight: 8 }}>
             <Text>{u.email}</Text>
             <Text>{u.name} / {u.affiliation} / {u.division ?? '-'}</Text>
+            <Text style={{ color: '#555' }}>
+              役割: {u.role ?? 'employee'}
+              {u.role === 'employee' ? ` / 上長: ${u.managerEmail ?? '-'}` : ''}
+            </Text>
           </View>
           <View style={styles.buttonsRow}>
             <Button title="編集" onPress={() => startEdit(u)} />
@@ -211,23 +225,10 @@ const styles = StyleSheet.create({
   heading: { fontSize: 20, marginBottom: 12, textAlign: 'center' },
   input: { borderWidth: 1, borderColor: '#ccc', padding: 8, marginBottom: 12, borderRadius: 4 },
   label: { marginBottom: 6, fontSize: 14, color: '#333' },
-
-  // iOS用の見た目（TextInputと同じ風）
-  selectBox: {
-    borderWidth: 1, borderColor: '#ccc', borderRadius: 4,
-    paddingVertical: 12, paddingHorizontal: 10, marginBottom: 12,
-    backgroundColor: '#fff',
-  },
-  selectBoxText: { fontSize: 16, color: '#333' },
-  placeholderText: { color: '#999' },
-
-  // Android用Pickerラッパー
   pickerWrapper: {
     borderWidth: 1, borderColor: '#ccc', borderRadius: 4,
     marginBottom: 12, overflow: 'hidden', backgroundColor: '#fff',
   },
-
-  helper: { marginTop: -6, marginBottom: 12, color: '#999', fontSize: 12 },
   listHeading: { fontSize: 18, marginVertical: 16 },
   userRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   buttonsRow: { flexDirection: 'row' },

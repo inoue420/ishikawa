@@ -12,7 +12,7 @@ import {
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
 import { DateContext } from '../../DateContext';
-import { fetchUserByEmail, fetchAttendanceByEmployeeAndDate, upsertAttendance } from '../../firestoreService';
+import { fetchUserByEmail, fetchAttendanceByEmployeeAndDate, requestPunch } from '../../firestoreService';
 
 import {
   updateDoc,
@@ -92,13 +92,13 @@ export default function AttendanceScreen({ route }) {
   }, [showDatePicker]);
 
   // 出退勤打刻 (既存レコードがあれば更新、なければ作成)
-  const handlePunch = async type => {
-    await upsertAttendance(
-      userEmail,
-      dateKey(selectedDate),
+  const handlePunch = async (type) => {
+    await requestPunch({
+      employeeId: userEmail,
+      dateStr: dateKey(selectedDate),
       type,
-      new Date()
-    );
+      time: new Date(),
+    });
     loadRecords();
   };
 
@@ -190,7 +190,12 @@ export default function AttendanceScreen({ route }) {
         keyExtractor={item => item.id}
         renderItem={({ item }) => (
           <View style={tw`bg-white px-4 py-2 border-b border-gray-200 flex-row justify-between items-center`}>
-            <Text style={tw`w-1/4`}>{item.type === 'in' ? '出勤' : '退勤'}</Text>
+            <View style={tw`w-1/3`}>
+              <Text>{item.type === 'in' ? '出勤' : '退勤'}</Text>
+              {item.status === 'pending'  && <Text style={tw`text-xs text-gray-500`}>（確認中）</Text>}
+              {item.status === 'rejected' && <Text style={tw`text-xs text-red-500`}>（却下）</Text>}
+              {item.status === 'approved' && <Text style={tw`text-xs text-green-600`}>（確定）</Text>}
+            </View>
             <TextInput
               style={tw`border border-gray-300 p-1 w-16 text-center`}
               keyboardType="number-pad"
@@ -199,7 +204,8 @@ export default function AttendanceScreen({ route }) {
                 const onlyNum = text.replace(/\D/g, '');
                 setRecordInputs(prev => ({ ...prev, [item.id]: onlyNum }));
               }}
-              onEndEditing={() => handleSaveTime(item.id)}
+              onEndEditing={() => item.status === 'approved' ? null : handleSaveTime(item.id)}
+              editable={item.status !== 'approved'}
             />
           </View>
         )}

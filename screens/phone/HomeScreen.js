@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useContext } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Button } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
 import { DateContext } from '../../DateContext';
@@ -69,6 +69,8 @@ export default function HomeScreen({ navigation }) {
       </View>
     );
   }
+  // （任意）仮の上長メール。実運用はログインユーザー等から取得して渡してください
+  const managerEmail = 'boss@example.com';
 
   return (
     <View style={tw`flex-1 bg-gray-100`}>
@@ -118,6 +120,14 @@ export default function HomeScreen({ navigation }) {
           })
         )}
       </ScrollView>
+      {/* 下部に固定配置（必要に応じて位置は調整） */}
+      <View style={tw`p-4 border-t border-gray-200 bg-white`}>
+        <Button
+          title="出勤認証ボタン（上長画面へ）"
+          onPress={() => navigation.navigate('ManagerApproval', { managerEmail })}
+        />
+      </View>
+
     </View>
   );
 }
