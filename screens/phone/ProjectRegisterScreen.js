@@ -18,7 +18,9 @@ import {
   fetchProjects,
   setProject,
   deleteProject,
+  fetchAllUsers,  
 } from '../../firestoreService';
+import { Picker } from '@react-native-picker/picker';
 
 const { width } = Dimensions.get('window');
 
@@ -47,6 +49,12 @@ export default function ProjectRegisterScreen() {
   const [showEditStartTimePicker, setShowEditStartTimePicker] = useState(false);
   const [showEditEndTimePicker, setShowEditEndTimePicker] = useState(false);
 
+  const [employees, setEmployees] = useState([]);
+  const [sales, setSales]           = useState(null);
+  const [survey, setSurvey]         = useState(null);
+  const [design, setDesign]         = useState(null);
+  const [management, setManagement] = useState(null);
+  
   const loadProjects = useCallback(async () => {
     setLoading(true);
     try {
@@ -63,6 +71,16 @@ export default function ProjectRegisterScreen() {
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
+   useEffect(() => {
+    (async () => {
+      try {
+        const list = await fetchAllUsers();
+        setEmployees(list);
+      } catch {
+        Alert.alert('エラー','従業員一覧の取得に失敗しました');
+      }
+    })();
+  }, []);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -71,6 +89,9 @@ export default function ProjectRegisterScreen() {
   }, [loadProjects]);
 
   const handleAdd = async () => {
+    if (!sales||!survey||!design||!management) {
+      return Alert.alert('入力エラー','すべての役割を選択してください');
+    }    
     if (!name.trim()) return Alert.alert('入力エラー', 'プロジェクト名を入力してください');
     if (!clientName.trim()) return Alert.alert('入力エラー', '顧客名を入力してください');
     setLoading(true);
@@ -78,9 +99,10 @@ export default function ProjectRegisterScreen() {
       await setProject(null, {
         name: name.trim(),
         clientName: clientName.trim(),
-        startDate,
-        endDate,
-        isMilestoneBilling: false, 
+        startDate, endDate,
+        // ── 追加: 役割フィールド ──
+        sales, survey, design, management,
+        isMilestoneBilling: false,
       });
       setName('');
       setClientName('');
@@ -158,6 +180,53 @@ export default function ProjectRegisterScreen() {
         <Text style={tw`mb-2`}>顧客名</Text>
         <TextInput style={tw`border border-gray-300 p-2 mb-4 rounded`} value={clientName} onChangeText={setClientName} placeholder="顧客名" />
 
+        <Text style={tw`mb-2`}>営業担当</Text>
+        <Picker
+          selectedValue={sales}
+          onValueChange={setSales}
+          style={tw`border border-gray-300 p-2 mb-4 rounded`}
+        >
+          <Picker.Item label="選択してください" value={null} />
+          {employees.map(emp => (
+            <Picker.Item key={emp.id} label={emp.name} value={emp.id} />
+          ))}
+        </Picker>
+
+        <Text style={tw`mb-2`}>現場調査担当</Text>
+        <Picker
+          selectedValue={survey}
+          onValueChange={setSurvey}
+          style={tw`border border-gray-300 p-2 mb-4 rounded`}
+        >
+          <Picker.Item label="選択してください" value={null} />
+          {employees.map(emp => (
+            <Picker.Item key={emp.id} label={emp.name} value={emp.id} />
+          ))}
+        </Picker>
+
+        <Text style={tw`mb-2`}>設計担当</Text>
+        <Picker
+          selectedValue={design}
+          onValueChange={setDesign}
+          style={tw`border border-gray-300 p-2 mb-4 rounded`}
+        >
+          <Picker.Item label="選択してください" value={null} />
+          {employees.map(emp => (
+            <Picker.Item key={emp.id} label={emp.name} value={emp.id} />
+          ))}
+        </Picker>
+
+        <Text style={tw`mb-2`}>管理担当</Text>
+        <Picker
+          selectedValue={management}
+          onValueChange={setManagement}
+          style={tw`border border-gray-300 p-2 mb-6 rounded`}
+        >
+          <Picker.Item label="選択してください" value={null} />
+          {employees.map(emp => (
+            <Picker.Item key={emp.id} label={emp.name} value={emp.id} />
+          ))}
+        </Picker>
         <Text style={tw`mb-2 font-semibold`}>開始予定日</Text>
         <TouchableOpacity style={tw`bg-white p-4 rounded mb-4 border border-gray-300`} onPress={() => setShowStartPicker(true)}>
           <Text>{startDate.toLocaleDateString()}</Text>

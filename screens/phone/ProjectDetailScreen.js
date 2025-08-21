@@ -3,6 +3,8 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { View, Text, ScrollView, ActivityIndicator } from 'react-native';
 import tw from 'twrnc';
 import {
+  fetchProjectById,
+  fetchAllUsers,
   fetchMaterialsRecords,
   fetchMaterialUsages,
   fetchMaterialsList
@@ -11,6 +13,8 @@ import {
 export default function ProjectDetailScreen({ route }) {
   const { projectId, date } = route.params; // 'YYYY-MM-DD'
   const [loading, setLoading] = useState(true);
+  const [project, setProject]     = useState(null);
+  const [employees, setEmployees] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [usages, setUsages] = useState([]);
   const [materialsList, setMaterialsList] = useState([]);
@@ -19,6 +23,11 @@ export default function ProjectDetailScreen({ route }) {
     (async () => {
       setLoading(true);
       try {
+        const proj = await fetchProjectById(projectId);
+        setProject(proj);
+        // ── 追加: 従業員一覧取得 ──
+        const emps = await fetchAllUsers();
+        setEmployees(emps);        
         // 資材記録取得・フィルタ
         const allMat = await fetchMaterialsRecords();
         const filteredMat = allMat.filter(m => {
@@ -78,6 +87,10 @@ export default function ProjectDetailScreen({ route }) {
   return (
     <ScrollView contentContainerStyle={tw`p-4`}>
       <Text style={tw`text-xl font-bold`}>プロジェクト詳細</Text>
+      <Text>営業担当:    {employees.find(e => e.id === project?.sales)?.name    || '—'}</Text>
+      <Text>現場調査担当: {employees.find(e => e.id === project?.survey)?.name   || '—'}</Text>
+      <Text>設計担当:    {employees.find(e => e.id === project?.design)?.name   || '—'}</Text>
+      <Text>管理担当:    {employees.find(e => e.id === project?.management)?.name || '—'}</Text>
 
       {/* 資材使用量グループ表示 */}
       <Text style={tw`mt-6 text-lg`}>

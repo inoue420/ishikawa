@@ -59,7 +59,18 @@ export async function addUser(userData) {
 
 /** ============================================
  * Projects コレクション
- * ============================================ */
+ *  ============================================ 
+ * フィールド一覧:
+ *   name         : string       // プロジェクト名
+ *   clientName   : string       // 顧客名
+ *   startDate    : Timestamp    // 開始日
+ *   endDate      : Timestamp    // 終了日
+ *   sales        : string       // 営業担当社員ID
+ *   survey       : string       // 現場調査担当社員ID
+ *   design       : string       // 設計担当社員ID
+ *   management   : string       // 管理担当社員ID
+ */
+
 export async function fetchProjects() {
   const snaps = await getDocs(projectsCol);
   return snaps.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -83,6 +94,21 @@ export async function setProject(projectId, projectData) {
   };
   return setDoc(docRef, dataToSave);
 }
+/**
+ * プロジェクトの役割情報のみ更新
+ * @param {string} projectId
+ * @param {{
+ *   sales: string;
+ *   survey: string;
+ *   design: string;
+ *   management: string;
+ * }} rolesData
+ */
+export async function updateProjectRoles(projectId, rolesData) {
+  const ref = doc(projectsCol, projectId);
+  return updateDoc(ref, rolesData);
+}
+
 export async function deleteProject(projectId) {
   const docRef = doc(projectsCol, projectId);
   return deleteDoc(docRef);
@@ -256,10 +282,11 @@ export async function updateMaterialUsage(usageId, quantity) {
 /** ============================================
  * Employees コレクション（従業員管理用）
  * ドキュメント ID にメールアドレスを使用
+ * schema: { email: string, name: string, affiliation: string, division?: string } 
  * ============================================ */
 /**
  * 従業員を登録
- * @param {{ email: string, name: string, affiliation: string }} data
+ * @param {{ email: string, name: string, affiliation: string, division?: string }} data
  */
 export async function registerUser(data) {
   const email = data.email.trim().toLowerCase();
@@ -288,7 +315,7 @@ export async function fetchAllUsers() {
 /**
  * 従業員情報を更新
  * @param {string} email
- * @param {{ name: string, affiliation: string }} data
+ * @param {{ name?: string, affiliation?: string, division?: string }} data
  */
 export async function updateUser(email, data) {
   const lower = email.trim().toLowerCase();
