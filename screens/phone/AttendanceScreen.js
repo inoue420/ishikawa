@@ -12,13 +12,9 @@ import {
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
 import { DateContext } from '../../DateContext';
-import { fetchUserByEmail, fetchAttendanceByEmployeeAndDate, upsertAttendance} from '../../firestoreService';
-
+import { fetchUserByEmail, fetchAttendanceByEmployeeAndDate, upsertAttendance } from '../../firestoreService';
 
 import {
-  collection,
-  getDocs,
-  addDoc,
   updateDoc,
   doc,
   Timestamp,
@@ -26,26 +22,32 @@ import {
 import { db } from '../../firebaseConfig';
 
 export default function AttendanceScreen({ route }) {
-
   console.log('[AttendanceScreen] route.params:', route.params);
   console.log('[AttendanceScreen] route.params.userEmail:', route.params?.userEmail);
 
   const userEmail = route.params?.userEmail ?? 'admin';
   const { date: selectedDate, setDate } = useContext(DateContext);
+
+  // ▼ 追加: 区分・所属も保持
   const [userName, setUserName] = useState('');
+  const [division, setDivision] = useState('');
+  const [affiliation, setAffiliation] = useState('');
+
   const [records, setRecords] = useState([]);
   const [recordInputs, setRecordInputs] = useState({});
   const [showDatePicker, setShowDatePicker] = useState(false);
 
   const dateKey = d => d.toISOString().slice(0, 10);
 
-  // ユーザー名ロード
+  // ユーザー名/区分/所属ロード
   useEffect(() => {
     (async () => {
       console.log('[AttendanceScreen] fetching user by email:', userEmail);
       const user = await fetchUserByEmail(userEmail);
       console.log('[AttendanceScreen] fetched user:', user);
       setUserName(user?.name ?? userEmail);
+      setDivision(user?.division ?? '');
+      setAffiliation(user?.affiliation ?? '');
     })();
   }, [userEmail]);
 
@@ -89,22 +91,20 @@ export default function AttendanceScreen({ route }) {
     }
   }, [showDatePicker]);
 
-      // 出退勤打刻 (既存レコードがあれば更新、なければ作成)
-    // 2) upsert 打刻
-    const handlePunch = async type => {
-      await upsertAttendance(
-        userEmail,
-        dateKey(selectedDate),
-        type,
-        new Date()
-      );
-      loadRecords();
-    };
+  // 出退勤打刻 (既存レコードがあれば更新、なければ作成)
+  const handlePunch = async type => {
+    await upsertAttendance(
+      userEmail,
+      dateKey(selectedDate),
+      type,
+      new Date()
+    );
+    loadRecords();
+  };
 
-    // 時分編集保存
-// 時分編集保存
+  // 時分編集保存
   const handleSaveTime = async id => {
-    const raw = recordInputs[id].replace(/\D/g, '');
+    const raw = (recordInputs[id] || '').replace(/\D/g, '');
     const val = parseInt(raw, 10);
     if (isNaN(val)) return;
     const hh = Math.floor(val / 100);
@@ -124,7 +124,7 @@ export default function AttendanceScreen({ route }) {
   };
 
   // HH:MM 表示
-  const formatHM = val => val.padStart(4, '0').replace(/(\d{2})(\d{2})/, '$1:$2');
+  const formatHM = val => (val || '').padStart(4, '0').replace(/(\d{2})(\d{2})/, '$1:$2');
 
   return (
     <View style={tw`flex-1 bg-gray-100`}>
@@ -144,8 +144,34 @@ export default function AttendanceScreen({ route }) {
         />
       )}
 
-      {/* ユーザー名 */}
-      <Text style={tw`text-xl text-center my-4`}>{userName}さん</Text>
+    {/* ユーザー情報行（左：区分/会社名、右：氏名） */}
+    <View style={tw`flex-row items-stretch mx-4 my-4`}>
+      {/* 左カラム：区分 / 会社名 */}
+      <View style={tw`w-2/5 mr-3`}>
+        {/* 区分 */}
+        <View style={tw`mb-2 border border-gray-300 rounded bg-white`}>
+          <Text style={tw`text-xs text-gray-500 px-2 pt-1`}>区分</Text>
+          <Text style={tw`text-base px-2 py-2`}>{division || '-'}</Text>
+        </View>
+        {/* 会社名（所属） */}
+        <View style={tw`border border-gray-300 rounded bg-white`}>
+          <Text style={tw`text-xs text-gray-500 px-2 pt-1`}>会社名</Text>
+          <Text style={tw`text-base px-2 py-2`}>{affiliation || '-'}</Text>
+        </View>
+      </View>
+
+      {/* 右カラム：氏名（フルネーム、“さん”なし） */}
+      <View style={tw`flex-1 border border-gray-300 rounded bg-white justify-center`}>
+        <Text
+          style={tw`text-xl font-semibold px-3 py-4`}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
+          {userName}
+        </Text>
+      </View>
+    </View>
+
 
       {/* ボタン配置 */}
       <View style={tw`flex-row w-full mb-6`}>
@@ -169,7 +195,10 @@ export default function AttendanceScreen({ route }) {
               style={tw`border border-gray-300 p-1 w-16 text-center`}
               keyboardType="number-pad"
               value={formatHM(recordInputs[item.id] || '')}
-              onChangeText={text => setRecordInputs({ ...recordInputs, [item.id]: text.replace(/\D/g, '') })}
+              onChangeText={text => {
+                const onlyNum = text.replace(/\D/g, '');
+                setRecordInputs(prev => ({ ...prev, [item.id]: onlyNum }));
+              }}
               onEndEditing={() => handleSaveTime(item.id)}
             />
           </View>
