@@ -5,9 +5,8 @@ import tw from 'twrnc';
 import { fetchPendingForManager, approvePunch, rejectPunch } from '../../firestoreService';
 
 export default function ManagerApprovalScreen({ route }) {
-  const managerEmail = route.params?.managerEmail ?? 'manager@example.com';
+  const managerLoginId = route.params?.managerLoginId ?? '';
   const today = new Date().toISOString().slice(0,10);
-
   const [start, setStart] = useState(today);
   const [end, setEnd]     = useState(today);
   const [rows, setRows]   = useState([]);
@@ -16,7 +15,9 @@ export default function ManagerApprovalScreen({ route }) {
   const load = async () => {
     setLoading(true);
     try {
-      const list = await fetchPendingForManager(managerEmail, { startDate: start, endDate: end });
+    const list = await fetchPendingForManager(managerLoginId, { startDate: start, endDate: end });
+    console.log('[ManagerApproval] fetched count =', list.length);
+    if (list.length === 0) console.log('[ManagerApproval] empty; check param/date/index');
       setRows(list);
     } catch (e) {
       console.error(e);
@@ -26,11 +27,14 @@ export default function ManagerApprovalScreen({ route }) {
     }
   };
 
-  useEffect(() => { load(); }, []);
+useEffect(() => {
+  console.log('[ManagerApproval] param managerLoginId =', managerLoginId);
+  load();
+}, []);
 
   const onApprove = async (id) => {
     try {
-      await approvePunch(id, managerEmail);
+      await approvePunch(id, managerLoginId);
       load();
     } catch (e) {
       console.error(e);
@@ -44,7 +48,7 @@ export default function ManagerApprovalScreen({ route }) {
       { text: 'キャンセル', style: 'cancel' },
       { text: '却下', style: 'destructive', onPress: async (note) => {
           try {
-            await rejectPunch(id, managerEmail, note ?? '');
+            await rejectPunch(id, managerLoginId, note ?? '');
             load();
           } catch (e) {
             console.error(e);
@@ -54,7 +58,7 @@ export default function ManagerApprovalScreen({ route }) {
       }
     ]) || (async () => { // Android代替
       try {
-        await rejectPunch(id, managerEmail, '');
+        await rejectPunch(id, managerLoginId, '');
         load();
       } catch (e) {
         console.error(e);
@@ -96,8 +100,7 @@ export default function ManagerApprovalScreen({ route }) {
               {item.date} / {item.type === 'in' ? '出勤' : '退勤'}
             </Text>
             <Text style={tw`text-base mt-1`}>
-              {item.employee?.name ?? item.employeeId}（{item.employee?.affiliation ?? '-'}）
-            </Text>
+              {item.employeeName ?? item.employeeId}（{item.affiliation ?? '-'}）            </Text>
             <View style={tw`flex-row mt-2`}>
               <View style={tw`mr-2`}>
                 <Button title="承認" onPress={() => onApprove(item.id)} />

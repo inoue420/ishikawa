@@ -304,6 +304,24 @@ export async function fetchUserByEmail(email) {
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 }
 
+// email でも loginId でも探せる従業員検索（移行期の両対応用）
+export async function findEmployeeByIdOrEmail(identifier) {
+  if (!identifier) return null;
+  const id = identifier.trim().toLowerCase();
+  // 1) ドキュメントID（= 旧来の email）として取得
+  const direct = await getDoc(doc(employeesCol, id));
+  if (direct.exists()) return { id: direct.id, ...direct.data() };
+  // 2) loginId フィールドで検索
+  const qy = query(employeesCol, where('loginId', '==', id));
+  const snaps = await getDocs(qy);
+  if (!snaps.empty) {
+    const d = snaps.docs[0];
+    return { id: d.id, ...d.data() };
+  }
+  return null;
+}
+
+
 /**
  * 従業員一覧を取得
  */
@@ -412,39 +430,37 @@ export async function fetchAttendanceHistory(employeeId, startDate, endDate) {
 // ── 承認フロー：打刻申請（出勤/退勤）
 export async function requestPunch({ employeeId, dateStr, type, time }) {
   const now = Timestamp.fromDate(time);
-  return addDoc(collection(db, "attendanceRecords"), {
-    employeeId,
+  const emp = await findEmployeeByIdOrEmail(employeeId);
+  const payload = {
+    employeeId,                 // 受け取ったID（メールでなくてもOK）
+    employeeLoginId: emp?.loginId ?? null,
+    employeeName: emp?.name ?? null,
+    affiliation: emp?.affiliation ?? null,
+    managerLoginId: emp?.managerLoginId ?? null,  // ★ 正規化
+    managerEmail: emp?.managerEmail ?? null,      // 互換のため残す（使わなくてもOK）
     date: dateStr,
-    type,               // "in" | "out"
-    timestamp: now,     // 初回打刻時刻を保持
+    type,
+    timestamp: now,
     status: "pending",
     requestedAt: now,
-  });
+  };
+  return addDoc(collection(db, "attendanceRecords"), payload);
 }
 
 // ── 上長: 自分の承認待ち一覧を取得（当日 or 期間指定）
-export async function fetchPendingForManager(managerEmail, { startDate, endDate }) {
-  // 1) まずは pending の打刻を期間で取る
-  let qAttendance = query(
+export async function fetchPendingForManager(managerLoginId, { startDate, endDate }) {
+    // pending かつ 自分（managerLoginId）宛のものを取得
+    const qAttendance = query(
     collection(db, "attendanceRecords"),
     where("status", "==", "pending"),
-    ...(startDate ? [where("date", ">=", startDate)] : []),
+    where("managerLoginId", "==", managerLoginId),
+     ...(startDate ? [where("date", ">=", startDate)] : []),
     ...(endDate   ? [where("date", "<=", endDate)]   : []),
   );
   const snap = await getDocs(qAttendance);
-  const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-  // 2) 各行の employeeId（メール）→ 従業員ドキュメントをJOIN
-  const results = [];
-  for (const r of rows) {
-    const emp = await fetchUserByEmail(r.employeeId); // 既存関数を利用
-    // managerEmail が一致するものだけ返す
-    if (emp && (emp.managerEmail || "").toLowerCase() === managerEmail.toLowerCase()) {
-      results.push({ ...r, employee: emp });
-    }
-  }
-  // sort: 日付→時刻→type(in優先)
-  results.sort((a, b) => {
+    const results = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // ソート: 日付→時刻→type(in優先)
+    results.sort((a, b) => {
     if (a.date !== b.date) return a.date.localeCompare(b.date);
     const ta = a.timestamp?.toDate?.() || new Date(a.timestamp);
     const tb = b.timestamp?.toDate?.() || new Date(b.timestamp);
@@ -454,21 +470,21 @@ export async function fetchPendingForManager(managerEmail, { startDate, endDate 
 }
 
 // ── 上長: 承認
-export async function approvePunch(recordId, approverEmail) {
+export async function approvePunch(recordId, approverLoginId) {
   const ref = doc(db, "attendanceRecords", recordId);
   return updateDoc(ref, {
     status: "approved",
-    approverId: approverEmail,
+    approverLoginId,
     approvedAt: serverTimestamp(),
   });
 }
 
 // ── 上長: 却下（理由つき）
-export async function rejectPunch(recordId, approverEmail, note = "") {
+export async function rejectPunch(recordId, approverLoginId, note = "") {
   const ref = doc(db, "attendanceRecords", recordId);
   return updateDoc(ref, {
     status: "rejected",
-    approverId: approverEmail,
+    approverLoginId,
     approvedAt: serverTimestamp(),
     note,
   });

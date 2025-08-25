@@ -15,14 +15,15 @@ const ROLE_OPTIONS = ['manager', 'employee'];
 
 export default function UserRegisterScreen() {
   const [email, setEmail] = useState('');
+  const [loginId, setLoginId] = useState('');            // ★ 追加：ログインID
   const [name, setName] = useState('');
   const [affiliation, setAffiliation] = useState('');
   const [division, setDivision] = useState('');
   const [role, setRole] = useState('employee');
-  const [managerEmail, setManagerEmail] = useState('');
+  const [managerLoginId, setManagerLoginId] = useState(''); // ★ 上長は loginId で紐付け
 
   const [users, setUsers] = useState([]);
-  const [managers, setManagers] = useState([]); // role === 'manager' の従業員一覧
+  const [managers, setManagers] = useState([]);          // ★ 追加：manager一覧
   const [loading, setLoading] = useState(false);
   const [editingEmail, setEditingEmail] = useState(null);
 
@@ -44,7 +45,7 @@ export default function UserRegisterScreen() {
     if (!addr || !name.trim() || !affiliation.trim() || !division.trim()) {
       return Alert.alert('入力エラー', '必須項目（メール・氏名・所属・区分）を入力してください');
     }
-    if (role === 'employee' && !managerEmail.trim()) {
+    if (role === 'employee' && !managerLoginId.trim()) {
       return Alert.alert('入力エラー', '役割が従業員の場合は上長を選択してください');
     }
 
@@ -52,8 +53,9 @@ export default function UserRegisterScreen() {
     try {
       if (editingEmail) {
         await updateUser(editingEmail, {
+          loginId: loginId.trim().toLowerCase(),
           name, affiliation, division, role,
-          managerEmail: role === 'employee' ? managerEmail : '',
+          managerLoginId: role === 'employee' ? managerLoginId.trim().toLowerCase() : '',
         });
         Alert.alert('更新完了', `${editingEmail} の情報を更新しました`);
       } else {
@@ -64,15 +66,17 @@ export default function UserRegisterScreen() {
           return;
         }
         await registerUser({
-          email: addr, name, affiliation, division, role,
-          managerEmail: role === 'employee' ? managerEmail : '',
+          email: addr, // 互換用に保持
+          loginId: loginId.trim().toLowerCase(),
+          name, affiliation, division, role,
+          managerLoginId: role === 'employee' ? managerLoginId.trim().toLowerCase() : '',
         });
         Alert.alert('登録完了', `${addr} を従業員として登録しました`);
       }
 
       // クリア
-      setEmail(''); setName(''); setAffiliation(''); setDivision('');
-      setRole('employee'); setManagerEmail('');
+      setEmail(''); setLoginId(''); setName(''); setAffiliation(''); setDivision('');
+      setRole('employee'); setManagerLoginId('');
       setEditingEmail(null);
       await loadUsers();
     } catch (e) {
@@ -86,11 +90,12 @@ export default function UserRegisterScreen() {
   const startEdit = (u) => {
     setEditingEmail(u.email);
     setEmail(u.email);
+    setLoginId(u.loginId ?? '');
     setName(u.name ?? '');
     setAffiliation(u.affiliation ?? '');
     setDivision(u.division ?? '');
     setRole(u.role ?? 'employee');
-    setManagerEmail(u.managerEmail ?? '');
+    setManagerLoginId(u.managerLoginId ?? '');
   };
 
   const handleDelete = async (addr) => {
@@ -151,6 +156,15 @@ export default function UserRegisterScreen() {
         </Picker>
       </View>
 
+      {/* ログインID */}
+      <TextInput
+        style={styles.input}
+        placeholder="ログインID（例：tanaka01）"
+        autoCapitalize="none"
+        value={loginId}
+        onChangeText={setLoginId}
+      />
+
       {/* 役割 */}
       <Text style={styles.label}>役割</Text>
       <View style={styles.pickerWrapper}>
@@ -159,22 +173,22 @@ export default function UserRegisterScreen() {
         </Picker>
       </View>
 
-      {/* 上長（employee のみ表示） */}
+      {/* 上長（employee のみ表示、loginId で紐づけ） */}
       {role === 'employee' && (
         <>
-          <Text style={styles.label}>上長（manager）</Text>
+          <Text style={styles.label}>上長（manager / loginId）</Text>
           <View style={styles.pickerWrapper}>
             <Picker
-              selectedValue={managerEmail}
-              onValueChange={setManagerEmail}
+              selectedValue={managerLoginId}
+              onValueChange={setManagerLoginId}
               mode="dropdown"
             >
               <Picker.Item label="選択してください" value="" />
               {managers.map(m => (
                 <Picker.Item
-                  key={m.email}
-                  label={`${m.name ?? m.email}（${m.affiliation ?? '-'}）`}
-                  value={m.email}
+                  key={m.loginId || m.email}
+                  label={`${m.name ?? m.loginId ?? m.email}${m.affiliation ? `（${m.affiliation}）` : ''}`}
+                  value={m.loginId ?? ''}
                 />
               ))}
             </Picker>
@@ -192,8 +206,8 @@ export default function UserRegisterScreen() {
         <View style={styles.cancelButton}>
           <Button title="キャンセル" onPress={() => {
             setEditingEmail(null);
-            setEmail(''); setName(''); setAffiliation(''); setDivision('');
-            setRole('employee'); setManagerEmail('');
+            setEmail(''); setLoginId(''); setName(''); setAffiliation(''); setDivision('');
+            setRole('employee'); setManagerLoginId('');
           }} />
         </View>
       )}
@@ -206,7 +220,7 @@ export default function UserRegisterScreen() {
             <Text>{u.name} / {u.affiliation} / {u.division ?? '-'}</Text>
             <Text style={{ color: '#555' }}>
               役割: {u.role ?? 'employee'}
-              {u.role === 'employee' ? ` / 上長: ${u.managerEmail ?? '-'}` : ''}
+              {u.role === 'employee' ? ` / 上長(loginId): ${u.managerLoginId ?? '-'}` : ''}
             </Text>
           </View>
           <View style={styles.buttonsRow}>

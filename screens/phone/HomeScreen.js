@@ -4,12 +4,25 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
 import { DateContext } from '../../DateContext';
 import { fetchProjects } from '../../firestoreService';
+import { findEmployeeByIdOrEmail } from '../../firestoreService';
 
-export default function HomeScreen({ navigation }) {
+export default function HomeScreen({ navigation, route }) {
   const { date: selectedDate, setDate } = useContext(DateContext);
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState([]);
   const [showPicker, setShowPicker] = useState(false);
+  const userEmail = route?.params?.userEmail ?? null; // 2) で渡した値
+  const [me, setMe] = useState(null);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!userEmail) return;
+      const emp = await findEmployeeByIdOrEmail(userEmail); // email or loginId どちらでも可
+      if (mounted) setMe(emp);
+    })();
+    return () => { mounted = false; };
+  }, [userEmail]);
 
   // YYYY-MM-DD 形式の文字列を返す
   const dateKey = d => {
@@ -121,12 +134,17 @@ export default function HomeScreen({ navigation }) {
         )}
       </ScrollView>
       {/* 下部に固定配置（必要に応じて位置は調整） */}
-      <View style={tw`p-4 border-t border-gray-200 bg-white`}>
-        <Button
-          title="出勤認証ボタン（上長画面へ）"
-          onPress={() => navigation.navigate('ManagerApproval', { managerEmail })}
-        />
-      </View>
+     {/* マネージャーのみ表示 */}
+     {me?.role === 'manager' && me?.loginId && (
+       <View style={tw`p-4 border-t border-gray-200 bg-white`}>
+         <Button
+           title="出勤認証（自分の部下のみ）"
+           onPress={() =>
+             navigation.navigate('ManagerApproval', { managerLoginId: me.loginId })
+           }
+         />
+       </View>
+     )}
 
     </View>
   );

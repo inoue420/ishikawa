@@ -7,11 +7,17 @@ import ManagerApprovalScreen from './ManagerApprovalScreen';
 
 const Stack = createStackNavigator();
 
-export default function HomeStackNavigator() {
+export default function HomeStackNavigator({ route }) {
+  const userEmail = route?.params?.userEmail ?? null; // Tab から受ける
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       {/* ホーム画面 */}
-      <Stack.Screen     name="Home"           component={HomeScreen}     />
+     <Stack.Screen
+       name="Home"
+       component={HomeScreen}
+       options={{ title: 'ホーム' }}
+       initialParams={{ userEmail }}  // ★ HomeScreen へ引き継ぎ
+     />
       {/* プロジェクト詳細画面 */}
       <Stack.Screen    name="ProjectDetail"   component={ProjectDetailScreen}      />
      <Stack.Screen

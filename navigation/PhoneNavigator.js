@@ -34,7 +34,11 @@ export default function PhoneNavigator( { userEmail } ) {
         headerShown:             false,
       })}
     >
-      <Tab.Screen name="HomeStack"  component={HomeStackNavigator} />
+      <Tab.Screen
+        name="HomeStack"
+        component={HomeStackNavigator}
+        initialParams={{ userEmail }}  // ★ 既存の userEmail を渡す（loginId を持っているならそれでもOK）
+      />
       <Tab.Screen name="Attendance" component={AttendanceScreen}   initialParams={{ userEmail }} />
       <Tab.Screen name="Materials"  component={MaterialsScreen} />
       <Tab.Screen name="WIP"        component={WIPScreen} />
