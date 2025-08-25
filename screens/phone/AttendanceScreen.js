@@ -175,10 +175,14 @@ export default function AttendanceScreen({ route }) {
 
       {/* ボタン配置 */}
       <View style={tw`flex-row w-full mb-6`}>
-        <View style={tw`w-1/2 items-center`}>
+        <View style={tw`w-1/3 items-center`}>
           <Button title="出勤" onPress={() => handlePunch('in')} />
         </View>
-        <View style={tw`w-1/2 items-center`}>
+        <View style={tw`w-1/3 items-center`}>
+          {/* 早退ボタン（処理は退勤と同じ 'out'） */}
+          <Button title="早退" onPress={() => handlePunch('out')} color="orange" />
+        </View>
+        <View style={tw`w-1/3 items-center`}>
           <Button title="退勤" onPress={() => handlePunch('out')} />
         </View>
       </View>
