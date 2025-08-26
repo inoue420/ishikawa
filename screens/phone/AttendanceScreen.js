@@ -20,6 +20,15 @@ import {
   Timestamp,
 } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
+// 追加：簡易チェックUI（☑/☐）
+const Check = React.memo(function Check({ label, checked, onPress }) {
+  return (
+    <TouchableOpacity onPress={onPress} style={tw`mr-4 mb-2 flex-row items-center`}>
+      <Text style={tw`text-xl mr-1`}>{checked ? '☑' : '☐'}</Text>
+      <Text>{label}</Text>
+    </TouchableOpacity>
+  );
+});
 
 export default function AttendanceScreen({ route }) {
   console.log('[AttendanceScreen] route.params:', route.params);
@@ -36,6 +45,10 @@ export default function AttendanceScreen({ route }) {
   const [records, setRecords] = useState([]);
   const [recordInputs, setRecordInputs] = useState({});
   const [showDatePicker, setShowDatePicker] = useState(false);
+    // ▼ 追加: アルコールチェック状態
+  const [deviceUsed, setDeviceUsed] = useState(null);     // true=使用 / false=不使用
+  const [intoxicated, setIntoxicated] = useState(null);   // true=あり  / false=なし
+  const acCompleted = deviceUsed !== null && intoxicated !== null;
 
   const dateKey = d => d.toISOString().slice(0, 10);
 
@@ -72,8 +85,9 @@ export default function AttendanceScreen({ route }) {
   useEffect(() => {
     const inputs = {};
     records.forEach(item => {
-      const h = item.timestamp.getHours();
-      const m = item.timestamp.getMinutes();
+      const t = item?.timestamp?.toDate ? item.timestamp.toDate() : new Date(item.timestamp);
+      const h = t.getHours();
+      const m = t.getMinutes();
       inputs[item.id] = String(h * 100 + m).padStart(4, '0');
     });
     setRecordInputs(inputs);
@@ -92,15 +106,17 @@ export default function AttendanceScreen({ route }) {
   }, [showDatePicker]);
 
   // 出退勤打刻 (既存レコードがあれば更新、なければ作成)
-  const handlePunch = async (type) => {
-    await requestPunch({
-      employeeId: userEmail,
-      dateStr: dateKey(selectedDate),
-      type,
-      time: new Date(),
-    });
-    loadRecords();
-  };
+    const handlePunch = async (type) => {
+      if (!acCompleted) return; // 二重防止（UIでも無効化）
+      await requestPunch({
+        employeeId: userEmail,
+        dateStr: dateKey(selectedDate),
+        type,
+        time: new Date(),
+        alcoholCheck: { deviceUsed, intoxicated },
+      });
+      loadRecords();
+    };
 
   // 時分編集保存
   const handleSaveTime = async id => {
@@ -119,101 +135,145 @@ export default function AttendanceScreen({ route }) {
 
   // 日付ピックハンドラ
   const onDateChange = (_, d) => {
-    if (Platform.OS === 'android') return;
-    if (d) setDate(d);
+    if (!d) return;
+    setDate(d);
   };
 
   // HH:MM 表示
   const formatHM = val => (val || '').padStart(4, '0').replace(/(\d{2})(\d{2})/, '$1:$2');
 
+// ListHeaderComponent 用（アルコールチェック + 見出し）
+const Header = React.memo(function Header() {
   return (
-    <View style={tw`flex-1 bg-gray-100`}>
-      {/* 日付選択 */}
+    <View>
+      <View style={tw`mx-4 mb-3 p-3 border border-gray-300 rounded-xl bg-white`}>
+        <Text style={tw`font-bold text-base mb-3`}>アルコールチェック</Text>
+
+        <Text style={tw`mb-1`}>検知器</Text>
+        <View style={tw`flex-row mb-2`}>
+          <Check label="使用"   checked={deviceUsed === true}  onPress={() => setDeviceUsed(true)} />
+          <Check label="不使用" checked={deviceUsed === false} onPress={() => setDeviceUsed(false)} />
+        </View>
+
+        <Text style={tw`mb-1`}>酒気帯び</Text>
+        <View style={tw`flex-row`}>
+          <Check label="なし" checked={intoxicated === false} onPress={() => setIntoxicated(false)} />
+          <Check label="あり" checked={intoxicated === true}  onPress={() => setIntoxicated(true)} />
+        </View>
+
+        {/* ← 動的カラーは style 配列で与える */}
+        <Text style={[tw`mt-2`, acCompleted ? tw`text-green-600` : tw`text-red-600`]}>
+          {acCompleted ? 'アルコールチェック：保存予定（打刻時に送信）' : 'アルコールチェック未完了'}
+        </Text>
+      </View>
+
+      <View style={tw`px-4 mb-2`}>
+        <Text style={tw`text-lg font-medium`}>履歴</Text>
+      </View>
+    </View>
+  );
+});
+
+// ListEmptyComponent 用
+const Empty = React.memo(function Empty() {
+  return (
+    <View style={tw`py-8`}>
+      <Text style={tw`text-center text-gray-500`}>履歴はありません</Text>
+    </View>
+  );
+});
+
+return (
+  <View style={tw`flex-1 bg-gray-100`}>
+    <View>
       <View style={tw`flex-row items-center mt-4 p-4 bg-white border-b border-gray-300`}>
         <TouchableOpacity style={tw`flex-1`} onPress={() => setShowDatePicker(true)}>
           <Text style={tw`text-lg text-center`}>{dateKey(selectedDate)}</Text>
         </TouchableOpacity>
       </View>
-      {/* iOS: コンポーネントレンダー */}
-      {Platform.OS === 'ios' && showDatePicker && (
+      {Platform.OS === 'ios' && showDatePicker ? (
         <DateTimePicker
           value={selectedDate}
           mode="date"
           display="default"
           onChange={onDateChange}
         />
-      )}
+      ) : null}
 
-    {/* ユーザー情報行（左：区分/会社名、右：氏名） */}
-    <View style={tw`flex-row items-stretch mx-4 my-4`}>
-      {/* 左カラム：区分 / 会社名 */}
-      <View style={tw`w-2/5 mr-3`}>
-        {/* 区分 */}
-        <View style={tw`mb-2 border border-gray-300 rounded bg-white`}>
-          <Text style={tw`text-xs text-gray-500 px-2 pt-1`}>区分</Text>
-          <Text style={tw`text-base px-2 py-2`}>{division || '-'}</Text>
-        </View>
-        {/* 会社名（所属） */}
-        <View style={tw`border border-gray-300 rounded bg-white`}>
-          <Text style={tw`text-xs text-gray-500 px-2 pt-1`}>会社名</Text>
-          <Text style={tw`text-base px-2 py-2`}>{affiliation || '-'}</Text>
-        </View>
-      </View>
-
-      {/* 右カラム：氏名（フルネーム、“さん”なし） */}
-      <View style={tw`flex-1 border border-gray-300 rounded bg-white justify-center`}>
-        <Text
-          style={tw`text-xl font-semibold px-3 py-4`}
-          numberOfLines={1}
-          ellipsizeMode="tail"
-        >
-          {userName}
-        </Text>
-      </View>
-    </View>
-
-
-      {/* ボタン配置 */}
-      <View style={tw`flex-row w-full mb-6`}>
-        <View style={tw`w-1/3 items-center`}>
-          <Button title="出勤" onPress={() => handlePunch('in')} />
-        </View>
-        <View style={tw`w-1/3 items-center`}>
-          {/* 早退ボタン（処理は退勤と同じ 'out'） */}
-          <Button title="早退" onPress={() => handlePunch('out')} color="orange" />
-        </View>
-        <View style={tw`w-1/3 items-center`}>
-          <Button title="退勤" onPress={() => handlePunch('out')} />
-        </View>
-      </View>
-
-      {/* 履歴 */}
-      <Text style={tw`text-lg font-medium px-4 mb-2`}>履歴</Text>
-      <FlatList
-        data={records}
-        keyExtractor={item => item.id}
-        renderItem={({ item }) => (
-          <View style={tw`bg-white px-4 py-2 border-b border-gray-200 flex-row justify-between items-center`}>
-            <View style={tw`w-1/3`}>
-              <Text>{item.type === 'in' ? '出勤' : '退勤'}</Text>
-              {item.status === 'pending'  && <Text style={tw`text-xs text-gray-500`}>（確認中）</Text>}
-              {item.status === 'rejected' && <Text style={tw`text-xs text-red-500`}>（却下）</Text>}
-              {item.status === 'approved' && <Text style={tw`text-xs text-green-600`}>（確定）</Text>}
-            </View>
-            <TextInput
-              style={tw`border border-gray-300 p-1 w-16 text-center`}
-              keyboardType="number-pad"
-              value={formatHM(recordInputs[item.id] || '')}
-              onChangeText={text => {
-                const onlyNum = text.replace(/\D/g, '');
-                setRecordInputs(prev => ({ ...prev, [item.id]: onlyNum }));
-              }}
-              onEndEditing={() => item.status === 'approved' ? null : handleSaveTime(item.id)}
-              editable={item.status !== 'approved'}
-            />
+      {/* ユーザー情報行 */}
+      <View style={tw`flex-row items-stretch mx-4 my-4`}>
+        <View style={tw`w-2/5 mr-3`}>
+          <View style={tw`mb-2 border border-gray-300 rounded bg-white`}>
+            <Text style={tw`text-xs text-gray-500 px-2 pt-1`}>区分</Text>
+            <Text style={tw`text-base px-2 py-2`}>{division || '-'}</Text>
           </View>
-        )}
-      />
+          <View style={tw`border border-gray-300 rounded bg-white`}>
+            <Text style={tw`text-xs text-gray-500 px-2 pt-1`}>会社名</Text>
+            <Text style={tw`text-base px-2 py-2`}>{affiliation || '-'}</Text>
+          </View>
+        </View>
+        <View style={tw`flex-1 border border-gray-300 rounded bg-white justify-center`}>
+          <Text style={tw`text-xl font-semibold px-3 py-4`} numberOfLines={1} ellipsizeMode="tail">
+            {userName}
+          </Text>
+        </View>
+      </View>
+
+      {/* ボタン配置（アルコールチェック完了まで無効化） */}
+      <View style={tw`flex-row w-full mb-3`}>
+        <View style={tw`w-1/3 items-center`}>
+          <Button title="出勤" onPress={() => handlePunch('in')} disabled={!acCompleted} />
+        </View>
+        <View style={tw`w-1/3 items-center`}>
+          <Button title="早退" onPress={() => handlePunch('out')} color="orange" disabled={!acCompleted} />
+        </View>
+        <View style={tw`w-1/3 items-center`}>
+          <Button title="退勤" onPress={() => handlePunch('out')} disabled={!acCompleted} />
+        </View>
+      </View>
     </View>
-  );
+
+    {/* スクロールエリア（アルコールチェック + 履歴） */}
+    <FlatList
+      style={tw`flex-1`}
+      data={records}
+      keyExtractor={(item) => String(item.id)}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={true}
+      contentContainerStyle={tw`pb-10`}
+      ListHeaderComponent={<Header />}
+      renderItem={({ item }) => (
+        <View style={tw`bg-white px-4 py-2 border-b border-gray-200 flex-row justify-between items-center`}>
+          <View style={tw`w-1/3`}>
+            <Text>{item.type === 'in' ? '出勤' : '退勤'}</Text>
+            {item.status === 'pending'  && <Text style={tw`text-xs text-gray-500`}>（確認中）</Text>}
+            {item.status === 'rejected' && <Text style={tw`text-xs text-red-500`}>（却下）</Text>}
+            {item.status === 'approved' && <Text style={tw`text-xs text-green-600`}>（確定）</Text>}
+            {item.type === 'in' && item.alcoholCheck?.completed && (
+              <Text style={tw`text-xs text-gray-600 mt-1`}>
+                アルコール: 検知器{item.alcoholCheck.deviceUsed ? '使用' : '不使用'} / 酒気帯び{item.alcoholCheck.intoxicated ? 'あり' : 'なし'}
+              </Text>
+            )}
+          </View>
+          <TextInput
+            style={tw`border border-gray-300 p-1 w-16 text-center`}
+            keyboardType="number-pad"
+            value={formatHM(recordInputs[item.id] || '')}
+            onChangeText={text => {
+              const onlyNum = text.replace(/\D/g, '');
+              setRecordInputs(prev => ({ ...prev, [item.id]: onlyNum }));
+            }}
+            onEndEditing={() => {
+              if (item.status !== 'approved') {
+                handleSaveTime(item.id);
+              }
+            }}
+            editable={item.status !== 'approved'}
+          />
+        </View>
+      )}
+      ListEmptyComponent={<Empty />}
+    />
+  </View>
+);
 }

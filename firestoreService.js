@@ -364,11 +364,21 @@ export async function fetchAttendanceByEmployeeAndDate(employeeId, dateStr) {
     where('date', '==', dateStr)
   );
   const snaps = await getDocs(q);
-  return snaps.docs.map(d => ({
-    id: d.id,
-    type: d.data().type,
-    timestamp: d.data().timestamp.toDate(),
-  }));
+  return snaps.docs.map(d => {
+    const data = d.data();
+    const ts = data.timestamp?.toDate ? data.timestamp.toDate() : new Date(data.timestamp);
+    return {
+      id: d.id,
+      type: data.type,
+      timestamp: ts,
+      // ▼ 表示に必要な追加フィールド
+      status: data.status ?? undefined,
+      alcoholCheck: data.alcoholCheck ?? undefined,
+      managerApproval: data.managerApproval ?? undefined,
+      employeeName: data.employeeName ?? undefined,
+      affiliation: data.affiliation ?? undefined,
+    };
+  });
 }
 
 /**
@@ -428,7 +438,7 @@ export async function fetchAttendanceHistory(employeeId, startDate, endDate) {
 }
 
 // ── 承認フロー：打刻申請（出勤/退勤）
-export async function requestPunch({ employeeId, dateStr, type, time }) {
+export async function requestPunch({ employeeId, dateStr, type, time, alcoholCheck }) {
   const now = Timestamp.fromDate(time);
   const emp = await findEmployeeByIdOrEmail(employeeId);
   const payload = {
@@ -443,40 +453,64 @@ export async function requestPunch({ employeeId, dateStr, type, time }) {
     timestamp: now,
     status: "pending",
     requestedAt: now,
+    // ▼ 追加: アルコールチェック（UIで事前完了を必須に）
+    ...(alcoholCheck ? {
+      alcoholCheck: {
+        completed: !!(alcoholCheck?.deviceUsed !== undefined && alcoholCheck?.intoxicated !== undefined),
+        deviceUsed: !!alcoholCheck?.deviceUsed,      // true=使用 / false=不使用
+        intoxicated: !!alcoholCheck?.intoxicated,    // true=あり / false=なし
+        checkedAt: serverTimestamp(),
+      }
+    } : {})
   };
-  return addDoc(collection(db, "attendanceRecords"), payload);
+  return addDoc(attendanceCol, payload);
 }
 
-// ── 上長: 自分の承認待ち一覧を取得（当日 or 期間指定）
-export async function fetchPendingForManager(managerLoginId, { startDate, endDate }) {
-    // pending かつ 自分（managerLoginId）宛のものを取得
-    const qAttendance = query(
-    collection(db, "attendanceRecords"),
-    where("status", "==", "pending"),
-    where("managerLoginId", "==", managerLoginId),
-     ...(startDate ? [where("date", ">=", startDate)] : []),
-    ...(endDate   ? [where("date", "<=", endDate)]   : []),
+// ── 上長: 自分の承認待ち一覧を取得（単日文字列 or 期間オブジェクトの両対応）
+// rangeOrDate: 'YYYY-MM-DD' | { startDate?: string, endDate?: string }
+export async function fetchPendingForManager(managerLoginId, rangeOrDate) {
+  let startDate, endDate;
+  if (typeof rangeOrDate === 'string') {
+    startDate = rangeOrDate;
+    endDate   = rangeOrDate;
+  } else if (rangeOrDate && typeof rangeOrDate === 'object') {
+    ({ startDate, endDate } = rangeOrDate);
+  }
+
+  const qAttendance = query(
+    attendanceCol,
+    where('status', '==', 'pending'),
+    where('managerLoginId', '==', managerLoginId),
+    ...(startDate ? [where('date', '>=', startDate)] : []),
+    ...(endDate   ? [where('date', '<=', endDate  )] : []),
   );
   const snap = await getDocs(qAttendance);
-    const results = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    // ソート: 日付→時刻→type(in優先)
-    results.sort((a, b) => {
+  const results = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  // ソート: 日付→時刻→type(in優先)
+  results.sort((a, b) => {
     if (a.date !== b.date) return a.date.localeCompare(b.date);
     const ta = a.timestamp?.toDate?.() || new Date(a.timestamp);
     const tb = b.timestamp?.toDate?.() || new Date(b.timestamp);
-    return ta - tb || (a.type === "in" ? -1 : 1);
+    return (ta - tb) || (a.type === 'in' ? -1 : 1);
   });
   return results;
 }
 
 // ── 上長: 承認
-export async function approvePunch(recordId, approverLoginId) {
+export async function approvePunch(recordId, approverLoginId, approvalMethod) {
   const ref = doc(db, "attendanceRecords", recordId);
-  return updateDoc(ref, {
+  const payload = {
     status: "approved",
     approverLoginId,
-    approvedAt: serverTimestamp(),
-  });
+    rejectedAt: serverTimestamp(),
+    ...(approvalMethod ? {
+      managerApproval: {
+        method: approvalMethod,          // 'in-person' | 'phone' | 'video'
+        verifiedAt: serverTimestamp(),   // = 承認時刻
+      }
+    } : {})
+  };
+  return updateDoc(ref, payload);
 }
 
 // ── 上長: 却下（理由つき）
