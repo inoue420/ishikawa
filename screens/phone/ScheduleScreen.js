@@ -4,7 +4,8 @@ import { View, Text, TouchableOpacity, ActivityIndicator } from 'react-native';
 import tw from 'twrnc';
 import { Calendar, LocaleConfig } from 'react-native-calendars';
 import { DateContext } from '../../DateContext';
-import { fetchProjects } from '../../firestoreService';
+import { fetchProjectsOverlappingRange } from '../../firestoreService';
+import { useRef } from 'react';
 
 // ---------- 日本語ローカライズ ----------
 LocaleConfig.locales['ja'] = {
@@ -24,30 +25,69 @@ const toDateString = (d) => {
   return `${y}-${m}-${day}`;
 };
 const fromTimestampOrString = (v) => (v?.toDate ? v.toDate() : new Date(v));
-const colorFromId = (id) => {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) | 0;
-  const hue = Math.abs(hash) % 360;
-  return `hsl(${hue} 70% 50%)`;
-};
+const hslToHex = (h, s, l) => {
+   s/=100; l/=100;
+   const c=(1-Math.abs(2*l-1))*s, x=c*(1-Math.abs((h/60)%2-1)), m=l-c/2;
+   let [r,g,b]=[0,0,0];
+   if (h<60) [r,g,b]=[c,x,0]; else if (h<120) [r,g,b]=[x,c,0];
+   else if (h<180) [r,g,b]=[0,c,x]; else if (h<240) [r,g,b]=[0,x,c];
+   else if (h<300) [r,g,b]=[x,0,c]; else [r,g,b]=[c,0,x];
+   const toHex = v => Math.round((v+m)*255).toString(16).padStart(2,'0');
+   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+ };
+ const colorFromId = (id) => {
+   let hash = 0;
+   for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) | 0;
+   const hue = Math.abs(hash) % 360;
+   return hslToHex(hue, 70, 50);
+ };
 
 export default function ScheduleScreen({ navigation }) {
   const { date, setDate } = useContext(DateContext);
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState([]);
+  const cacheRef = useRef(new Map()); 
+  // 表示中の月（1日固定）をトラッキング
+  const [visibleMonth, setVisibleMonth] = useState(() => {
+    const d = new Date(date); return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const theme = useMemo(() => ({
+    textMonthFontWeight: '700',
+    todayTextColor: '#2563eb',
+    arrowColor: '#111827',
+  }), []);
 
-  // 1回ロード（必要なら月単位の遅延ロードにも拡張可能）
+
+
+  // 表示している月だけロード（前後にバッファ数日つけて帯切れを回避）
   useEffect(() => {
+    
     (async () => {
       setLoading(true);
       try {
-        const all = await fetchProjects();
-        setProjects(all ?? []);
+        const start = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1);
+        const end   = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 0);
+        // バッファ（例：前後3日）…月またぎの帯を自然に見せるため
+        const pad = 3;
+        const rangeStart = new Date(start); rangeStart.setDate(rangeStart.getDate() - pad); rangeStart.setHours(0,0,0,0);
+        const rangeEnd   = new Date(end);   rangeEnd.setDate(rangeEnd.getDate() + pad);   rangeEnd.setHours(23,59,59,999);
+        const ym = `${visibleMonth.getFullYear()}-${String(visibleMonth.getMonth()+1).padStart(2,'0')}`;
+        if (cacheRef.current.has(ym)) {
+          setProjects(cacheRef.current.get(ym));
+          setLoading(false);
+          return;
+        }
+        const rows = await fetchProjectsOverlappingRange(rangeStart, rangeEnd);
+       const data = rows ?? [];
+       cacheRef.current.set(ym, data);
+       setProjects(data);
+      } catch (e) {
+       console.error('[Schedule] fetch error:', e);
       } finally {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [visibleMonth]);
 
   // 日付キー → その日に重なるプロジェクト配列
   const projMap = useMemo(() => {
@@ -70,10 +110,9 @@ export default function ScheduleScreen({ navigation }) {
     // DateContext の日付を更新し、Home へ遷移
     const [y, m, d] = dateString.split('-').map(Number);
     setDate(new Date(y, m - 1, d));
-    navigation.navigate('Home');
+    navigation.navigate('HomeStack', { screen: 'Home' });
   }, [navigation, setDate]);
 
-  const initialDate = useMemo(() => toDateString(date), [date]);
 
   if (loading) {
     return (
@@ -89,40 +128,38 @@ export default function ScheduleScreen({ navigation }) {
         // ← ココがキモ：横スワイプで月移動
         enableSwipeMonths={true}
         // 初期表示（月の切替は自動反映）
-        initialDate={initialDate}
+        current={toDateString(visibleMonth)}   // ← “表示している月”を制御
         // 上部の月表示を日本語に
         monthFormat={'yyyy年 M月'}
         // 日付タップ
         onDayPress={(d) => handleSelectDate(d.dateString)}
-        // 月が変わったら DateContext も先頭日に合わせておくと一貫性UP（任意）
+        // 月が変わったら、表示月を更新→その月だけ再取得
         onMonthChange={(m) => {
-          const d = new Date(m.year, m.month - 1, 1);
-          setDate(d);
+          // 同じ月を何度もセットしないガード
+          if (
+            visibleMonth.getFullYear() === m.year &&
+            visibleMonth.getMonth() === m.month - 1
+          ) return;
+          setVisibleMonth(new Date(m.year, m.month - 1, 1));
         }}
-        // 見た目の微調整
-        theme={{
-          textMonthFontWeight: '700',
-          todayTextColor: '#2563eb',
-          arrowColor: '#111827',
-        }}
+        theme={theme}
         // 自前の dayComponent で「カラーバー」を表示
-        dayComponent={({ date: d, state, onPress }) => {
+        dayComponent={({ date: d, state }) => {
           const list = projMap[d.dateString] || [];
           const isDim = state === 'disabled'; // 前月・翌月の埋め草
           return (
-            <TouchableOpacity onPress={onPress} style={tw`p-1 h-20 w-full`}>
-              <Text style={tw.style('text-right text-xs mb-1', isDim ? 'text-gray-400' : 'text-gray-900')}>
+            <TouchableOpacity onPress={() => handleSelectDate(d.dateString)} style={tw`p-1 h-20 w-full`}>              <Text style={tw.style('text-right text-xs mb-1', isDim ? 'text-gray-400' : 'text-gray-900')}>
                 {d.day}
               </Text>
               {/* 最大3本まで横バー、超過は “+n” */}
-              {list.slice(0, 3).map((p) => (
+              {list.slice(0, 3).map((p, i) => (
                 <View
-                  key={p.id}
+                  key={`${p.id ?? p.title ?? i}`}
                   style={{
                     height: 4,
                     borderRadius: 2,
                     marginBottom: 2,
-                    backgroundColor: colorFromId(p.id),
+                    backgroundColor: colorFromId(String(p.id ?? p.title ?? i)),
                   }}
                 />
               ))}

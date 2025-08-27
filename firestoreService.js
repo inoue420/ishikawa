@@ -83,17 +83,45 @@ export async function fetchProjectById(projectId) {
 }
 export async function setProject(projectId, projectData) {
   const docRef = projectId ? doc(projectsCol, projectId) : doc(projectsCol);
+  const toTS = (v) => (v instanceof Date ? Timestamp.fromDate(v) : v ?? null);
   const dataToSave = {
     ...projectData,
-    startDate: projectData.startDate instanceof Date
-      ? Timestamp.fromDate(projectData.startDate)
-      : projectData.startDate,
-    endDate: projectData.endDate instanceof Date
-      ? Timestamp.fromDate(projectData.endDate)
-      : projectData.endDate,
+    startDate: toTS(projectData.startDate),
+    // 単日の場合は null を明示保存（クエリ②で拾える）
+    endDate: toTS(projectData.endDate),
   };
   return setDoc(docRef, dataToSave);
 }
+export async function fetchProjectsOverlappingRange(start, end) {
+  const startTs = Timestamp.fromDate(start);
+  const endTs   = Timestamp.fromDate(end);
+
+  // ① 期間オーバーラップ: startDate <= end && endDate >= start
+  const qOverlap = query(
+    projectsCol,
+    where('startDate', '<=', endTs),
+    where('endDate', '>=', startTs)
+  );
+  const s1 = await getDocs(qOverlap);
+
+  // ② 単日案件（endDate なし）: startDate が範囲内
+  const qSingle = query(
+    projectsCol,
+    where('endDate', '==', null),
+    where('startDate', '>=', startTs),
+    where('startDate', '<=', endTs)
+  );
+  const s2 = await getDocs(qSingle);
+
+  // 重複排除
+  const map = new Map();
+  s1.forEach(doc => map.set(doc.id, { id: doc.id, ...doc.data() }));
+  s2.forEach(doc => map.set(doc.id, { id: doc.id, ...doc.data() }));
+  return [...map.values()];
+}
+
+
+
 /**
  * プロジェクトの役割情報のみ更新
  * @param {string} projectId
@@ -263,7 +291,7 @@ export async function fetchMaterialUsages(projectId = null) {
       projectId: data.projectId,
       materialId: data.materialId,
       quantity: data.quantity,
-      timestamp: data.timestamp.toDate(),
+      timestamp: data.timestamp?.toDate?.() ?? null,
     };
   });
 }
@@ -502,7 +530,7 @@ export async function approvePunch(recordId, approverLoginId, approvalMethod) {
   const payload = {
     status: "approved",
     approverLoginId,
-    rejectedAt: serverTimestamp(),
+    approvedAt: serverTimestamp(),
     ...(approvalMethod ? {
       managerApproval: {
         method: approvalMethod,          // 'in-person' | 'phone' | 'video'
@@ -519,7 +547,7 @@ export async function rejectPunch(recordId, approverLoginId, note = "") {
   return updateDoc(ref, {
     status: "rejected",
     approverLoginId,
-    approvedAt: serverTimestamp(),
+    rejectedAt: serverTimestamp(),
     note,
   });
 }
