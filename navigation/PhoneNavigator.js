@@ -4,14 +4,13 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import HomeStackNavigator from '../screens/phone/HomeStackNavigator';
+import ScheduleScreen      from '../screens/phone/ScheduleScreen';
 import AttendanceScreen from '../screens/phone/AttendanceScreen';
 import MaterialsScreen from '../screens/phone/MaterialsScreen';
 import WIPScreen from '../screens/phone/WIPScreen';
 // BillingScreen は参照用として残すが、タブには登録しない
 // import BillingScreen from '../screens/phone/BillingScreen';
 import ProfileStackScreen from '../screens/phone/ProfileStackScreen';
-
-// ★ 新規追加
 import OverallScreen from '../screens/phone/OverallScreen';
 
 const Tab = createBottomTabNavigator();
@@ -27,6 +26,7 @@ export default function PhoneNavigator({ userEmail }) {
           let iconName = 'ellipse-outline';
           switch (route.name) {
             case 'Overall':    iconName = 'grid-outline'; break;     // ★新規
+            case 'Schedule': iconName = 'calendar-outline'; break;
             case 'HomeStack':  iconName = 'home-outline'; break;
             case 'Attendance': iconName = 'time-outline'; break;
             case 'Materials':  iconName = 'cube-outline'; break;
@@ -45,6 +45,12 @@ export default function PhoneNavigator({ userEmail }) {
         component={OverallScreen}
         options={{ title: 'Overall' }}
       />
+
+      <Tab.Screen 
+       name="Schedule" 
+       component={ScheduleScreen} 
+       options={{ title: 'スケジュール' }}
+       />
 
       {/* ★ その右に Home を配置 */}
       <Tab.Screen
