@@ -55,6 +55,7 @@ export default function ScheduleScreen({ navigation }) {
   const [projects, setProjects] = useState([]);
   const cacheRef = useRef(new Map());
   const screenWidth = Dimensions.get('window').width;
+  const dayWidth = useMemo(() => screenWidth / 7, [screenWidth]);
 
   // 表示中の月（1日固定）
   const [visibleMonth, setVisibleMonth] = useState(() => {
@@ -179,6 +180,8 @@ export default function ScheduleScreen({ navigation }) {
               isStart,
               isEnd,
               showLabel: idx === midIdx, // ← 週内セグメントの中央日だけラベル表示
+              segLen,                    // セグメント長（週内）
+              midIdx,                    // 中央位置（0始まり）
             };
           }
 
@@ -234,26 +237,48 @@ export default function ScheduleScreen({ navigation }) {
               // 空段はスペーサーを入れて高さを維持
               return <View key={`empty-${i}`} style={{ height: BAR_HEIGHT, marginBottom: 2 }} />;
             }
-           const { title, color, isStart, isEnd, showLabel } = laneItem;            return (
+           const { title, color, isStart, isEnd, showLabel, segLen, midIdx } = laneItem;
+            return (
               <View
                 key={`bar-${i}-${k}`}
                 style={{
                   height: BAR_HEIGHT,
                   marginBottom: 2,
                   backgroundColor: color,
-                 paddingHorizontal: 4,
-                 justifyContent: 'center',
-                 alignItems: 'center',     // 横方向センター                  borderTopLeftRadius:  isStart ? 6 : 0,
+                  paddingHorizontal: 4,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  position: 'relative',     // オーバーレイの基準
+                  overflow: 'visible',      // 横にはみ出すため
                   borderBottomLeftRadius:isStart ? 6 : 0,
                   borderTopRightRadius:  isEnd   ? 6 : 0,
                   borderBottomRightRadius:isEnd  ? 6 : 0,
                 }}
               >
                {/* 連続バーの中央日だけタイトルを表示（必ず<Text>で包む） */}
+               {/* 中央日のみ“バー全長”に見える横断ラベルを重ねる */}
                {showLabel ? (
-                 <Text numberOfLines={1} ellipsizeMode="tail" style={tw`text-[10px] text-white font-semibold`}>
-                   {title}
-                 </Text>
+                 <View
+                   pointerEvents="none"
+                   style={{
+                     position: 'absolute',
+                     top: 0,
+                     left: -(midIdx * dayWidth),    // 左側へ日数ぶんはみ出す
+                     width: (segLen * dayWidth),    // セグメント全長
+                     height: BAR_HEIGHT,
+                     justifyContent: 'center',
+                     alignItems: 'center',
+                   }}
+                 >
+                   <Text
+                     numberOfLines={1}
+                     ellipsizeMode="clip"
+                     allowFontScaling={false}
+                     style={tw`text-[10px] text-white font-semibold`}
+                   >
+                     {title}
+                   </Text>
+                 </View>
                ) : null}
               </View>
             );
