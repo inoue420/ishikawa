@@ -58,7 +58,6 @@ export default function ScheduleScreen({ navigation }) {
   }), []);
 
 
-
   // 表示している月だけロード（前後にバッファ数日つけて帯切れを回避）
   useEffect(() => {
     
@@ -148,24 +147,36 @@ export default function ScheduleScreen({ navigation }) {
           const list = projMap[d.dateString] || [];
           const isDim = state === 'disabled'; // 前月・翌月の埋め草
           return (
-            <TouchableOpacity onPress={() => handleSelectDate(d.dateString)} style={tw`p-1 h-20 w-full`}>              <Text style={tw.style('text-right text-xs mb-1', isDim ? 'text-gray-400' : 'text-gray-900')}>
-                {d.day}
-              </Text>
-              {/* 最大3本まで横バー、超過は “+n” */}
-              {list.slice(0, 3).map((p, i) => (
-                <View
-                  key={`${p.id ?? p.title ?? i}`}
-                  style={{
-                    height: 4,
-                    borderRadius: 2,
-                    marginBottom: 2,
-                    backgroundColor: colorFromId(String(p.id ?? p.title ?? i)),
-                  }}
-                />
-              ))}
-              {list.length > 3 && (
-                <Text style={tw`text-[10px] text-gray-500`}>+{list.length - 3}</Text>
-              )}
+            <TouchableOpacity
+              onPress={() => handleSelectDate(d.dateString)}
+              style={tw`p-1 h-20 w-full`}
+            >
+              {/* 直下に生テキストが入らないように必ず要素でラップ */}
+              <View>
+                <Text
+                  style={tw.style(
+                    'text-right text-xs mb-1',
+                    isDim ? 'text-gray-400' : 'text-gray-900'
+                  )}
+                >
+                  {String(d.day)}
+                </Text>
+                {/* 最大3本まで横バー、超過は “+n” */}
+                {list.slice(0, 3).map((p, i) => (
+                  <View
+                    key={`${p.id ?? p.title ?? i}`}
+                    style={{
+                      height: 4,
+                      borderRadius: 2,
+                      marginBottom: 2,
+                      backgroundColor: colorFromId(String(p.id ?? p.title ?? i)),
+                    }}
+                  />
+                ))}
+                {list.length > 3 ? (
+                  <Text style={tw`text-[10px] text-gray-500`}>{`+${list.length - 3}`}</Text>
+                ) : null}
+              </View>
             </TouchableOpacity>
           );
         }}

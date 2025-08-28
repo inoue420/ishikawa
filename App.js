@@ -8,7 +8,6 @@ import TabletNavigator from './navigation/TabletNavigator';
 import PhoneNavigator from './navigation/PhoneNavigator';
 import SignInScreen from './screens/phone/SignInScreen';
 import { createStackNavigator } from '@react-navigation/stack';
-import { LogBox } from 'react-native';
 
 const RootStack = createStackNavigator();
 
