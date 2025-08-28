@@ -171,10 +171,10 @@ export default function HomeScreen({ navigation, route }) {
                 {/* ここから置き換え */}
                 <View style={tw`flex-row items-stretch`}>
                   {/* 左：開始/終了（上下に離す）＋ 縦バー */}
-                  <View style={tw`w-16 pr-2 items-end justify-between`}>
-                    <View style={tw`absolute left-14 top-0 bottom-0 w-0.5 bg-green-400 rounded`} />
-                    <Text style={tw`text-gray-800 mt-0`}>{startTime}</Text>
-                    <Text style={tw`text-gray-400 mb -0`}>{endTime}</Text>
+                  <View style={tw`w-16 pr-2 items-end justify-between pt-1 pb-1`}>
+                    <View style={tw`absolute left-14 top-4 bottom-2 w-0.5 bg-green-400 rounded`} />
+                    <Text style={tw`text-gray-800 mt-2`}>{startTime}</Text>
+                    <Text style={tw`text-gray-400 `}>{endTime}</Text>
                   </View>
 
                   {/* 中央：カード（高さ確保のため minHeight を付与） */}
