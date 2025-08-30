@@ -69,6 +69,7 @@ export async function addUser(userData) {
  *   survey       : string       // 現場調査担当社員ID
  *   design       : string       // 設計担当社員ID
  *   management   : string       // 管理担当社員ID
+ *   participants  : string[] // 参加従業員の社員ID配列（複数）
  */
 
 export async function fetchProjects() {

@@ -18,6 +18,18 @@ export default function ProjectDetailScreen({ route }) {
   const [materials, setMaterials] = useState([]);
   const [usages, setUsages] = useState([]);
   const [materialsList, setMaterialsList] = useState([]);
+  // id→name の辞書と、参加者名リスト
+  const nameById = useMemo(
+    () => Object.fromEntries(employees.map(e => [e.id, e.name])),
+    [employees]
+  );
+  const participantNames = useMemo(
+    () =>
+      (project?.participants ?? [])
+        .map(id => nameById[id])
+        .filter(Boolean),
+    [project?.participants, nameById]
+  );
 
   useEffect(() => {
     (async () => {
@@ -91,6 +103,10 @@ export default function ProjectDetailScreen({ route }) {
       <Text>現場調査担当: {employees.find(e => e.id === project?.survey)?.name   || '—'}</Text>
       <Text>設計担当:    {employees.find(e => e.id === project?.design)?.name   || '—'}</Text>
       <Text>管理担当:    {employees.find(e => e.id === project?.management)?.name || '—'}</Text>
+      <Text>
+        参加従業員（{participantNames.length}名）:
+        {participantNames.length ? ` ${participantNames.join('、')}` : ' —'}
+      </Text>
 
       {/* 資材使用量グループ表示 */}
       <Text style={tw`mt-6 text-lg`}>

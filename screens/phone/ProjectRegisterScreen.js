@@ -59,6 +59,12 @@ export default function ProjectRegisterScreen() {
   const [survey, setSurvey]         = useState(null);
   const [design, setDesign]         = useState(null);
   const [management, setManagement] = useState(null);
+  const [participants, setParticipants] = useState([]);
+  const toggleParticipant = useCallback((empId) => {
+    setParticipants(prev =>
+      prev.includes(empId) ? prev.filter(id => id !== empId) : [...prev, empId]
+    );
+  }, []);
 
   const leftScrollRef = useRef(null);
   const leftBottomPadding = Platform.OS === 'ios' ? 160 : 160; // 余白（お好みで調整可） 
@@ -109,13 +115,14 @@ export default function ProjectRegisterScreen() {
         clientName: clientName.trim(),
         startDate, endDate,
         // ── 追加: 役割フィールド ──
-        sales, survey, design, management,
+        sales, survey, design, management, participants,
         isMilestoneBilling: false,
       });
       setName('');
       setClientName('');
       setStartDate(roundToHour(new Date()));
       setEndDate(roundToHour(new Date()));
+      setParticipants([]);
       await loadProjects();
       Alert.alert('成功', 'プロジェクトを追加しました');
     } catch (e) {
@@ -239,6 +246,27 @@ export default function ProjectRegisterScreen() {
             <Picker.Item key={emp.id} label={emp.name} value={emp.id} />
           ))}
         </Picker>
+        {/* 参加従業員（複数選択） */}
+        <Text style={tw`mb-2 font-semibold`}>参加従業員</Text>
+        <Text style={tw`text-gray-600 mb-2`}>選択中: {participants.length}名</Text>
+        <View style={tw`mb-6`}>
+          {employees.map((emp) => {
+            const checked = participants.includes(emp.id);
+            return (
+              <TouchableOpacity
+                key={emp.id}
+                onPress={() => toggleParticipant(emp.id)}
+                style={tw`bg-white border border-gray-300 rounded p-2 mb-2`}
+                activeOpacity={0.7}
+              >
+                {/* タップ可能要素の中身は<Text>で包む */}
+                <Text style={tw`text-base`}>
+                  {checked ? '☑ ' : '☐ '}<Text>{emp.name}</Text>
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
         <Text style={tw`mb-2 font-semibold`}>開始予定日</Text>
         <TouchableOpacity style={tw`bg-white p-4 rounded mb-4 border border-gray-300`} onPress={() => setShowStartPicker(true)}>
           <Text>{startDate.toLocaleDateString()}</Text>
