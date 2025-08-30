@@ -1,5 +1,5 @@
 // screens/ProjectRegisterScreen.js
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -24,6 +24,12 @@ import { Picker } from '@react-native-picker/picker';
 
 const { width } = Dimensions.get('window');
 
+// 分=00, 秒=0, ミリ秒=0 に丸める（“時”は維持）
+function roundToHour(d = new Date()) {
+  const x = new Date(d);
+  x.setHours(x.getHours(), 0, 0, 0);
+  return x;
+}
 export default function ProjectRegisterScreen() {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -31,9 +37,8 @@ export default function ProjectRegisterScreen() {
 
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
-  const [startDate, setStartDate] = useState(new Date());
-  const [endDate, setEndDate] = useState(new Date());
-  const [showStartPicker, setShowStartPicker] = useState(false);
+  const [startDate, setStartDate] = useState(() => roundToHour());
+  const [endDate, setEndDate] = useState(() => roundToHour());  const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
   // 新規登録フォーム用
   const [showStartTimePicker, setShowStartTimePicker] = useState(false);
@@ -54,6 +59,9 @@ export default function ProjectRegisterScreen() {
   const [survey, setSurvey]         = useState(null);
   const [design, setDesign]         = useState(null);
   const [management, setManagement] = useState(null);
+
+  const leftScrollRef = useRef(null);
+  const leftBottomPadding = Platform.OS === 'ios' ? 160 : 160; // 余白（お好みで調整可） 
   
   const loadProjects = useCallback(async () => {
     setLoading(true);
@@ -106,8 +114,8 @@ export default function ProjectRegisterScreen() {
       });
       setName('');
       setClientName('');
-      setStartDate(new Date());
-      setEndDate(new Date());
+      setStartDate(roundToHour(new Date()));
+      setEndDate(roundToHour(new Date()));
       await loadProjects();
       Alert.alert('成功', 'プロジェクトを追加しました');
     } catch (e) {
@@ -171,7 +179,11 @@ export default function ProjectRegisterScreen() {
   return (
     <View style={tw`flex-1 flex-row bg-gray-100`}>
       {/* 左カラム：新規追加フォーム (60%) */}
-      <ScrollView style={{ width: width * 0.6, padding: 16 }}>
+      <ScrollView
+        ref={leftScrollRef}
+        style={{ width: width * 0.6 }}
+        contentContainerStyle={{ padding: 16, paddingBottom: leftBottomPadding }}
+      >
         <Text style={tw`text-2xl font-bold mb-6`}>プロジェクト追加</Text>
 
         <Text style={tw`mb-2`}>プロジェクト名</Text>
@@ -231,9 +243,22 @@ export default function ProjectRegisterScreen() {
         <TouchableOpacity style={tw`bg-white p-4 rounded mb-4 border border-gray-300`} onPress={() => setShowStartPicker(true)}>
           <Text>{startDate.toLocaleDateString()}</Text>
         </TouchableOpacity>
-        {showStartPicker && (
-          <DateTimePicker value={startDate} mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'} onChange={(_, d) => { setShowStartPicker(false); if (d) setStartDate(d); }} />
-        )}
+       {showStartPicker && (
+         <DateTimePicker
+           value={startDate}
+           mode="date"
+           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+           onChange={(_, d) => {
+             setShowStartPicker(false);
+             if (d) {
+               const merged = new Date(d);
+               // 既存の「時」は維持、分=00で固定
+               merged.setHours(startDate.getHours(), 0, 0, 0);
+               setStartDate(merged);
+             }
+           }}
+         />
+       )}
                 {/* 開始予定時刻 */}
         <Text>開始予定時刻</Text>
         <TouchableOpacity onPress={() => setShowStartTimePicker(true)} style={tw`border p-2 mb-2`}>
@@ -248,21 +273,32 @@ export default function ProjectRegisterScreen() {
               setShowStartTimePicker(false);
               if (t) {
                 const d = new Date(startDate);
-                d.setHours(t.getHours(), t.getMinutes());
+                d.setHours(t.getHours(), t.getMinutes(), 0, 0); // 秒・msも0
                 setStartDate(d);
               }
             }}
           />
         )}
 
-
         <Text style={tw`mb-2 font-semibold`}>終了予定日</Text>
         <TouchableOpacity style={tw`bg-white p-4 rounded mb-6 border border-gray-300`} onPress={() => setShowEndPicker(true)}>
           <Text>{endDate.toLocaleDateString()}</Text>
         </TouchableOpacity>
-        {showEndPicker && (
-          <DateTimePicker value={endDate} mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'} onChange={(_, d) => { setShowEndPicker(false); if (d) setEndDate(d); }} />
-        )}
+       {showEndPicker && (
+         <DateTimePicker
+           value={endDate}
+           mode="date"
+           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+           onChange={(_, d) => {
+             setShowEndPicker(false);
+             if (d) {
+               const merged = new Date(d);
+               merged.setHours(endDate.getHours(), 0, 0, 0);
+               setEndDate(merged);
+             }
+           }}
+         />
+       )}
                 {/* 修了予定時刻 */}
         <Text>終了予定時刻</Text>
         <TouchableOpacity onPress={() => setShowEndTimePicker(true)} style={tw`border p-2 mb-2`}>
@@ -277,7 +313,7 @@ export default function ProjectRegisterScreen() {
               setShowEndTimePicker(false);
               if (t) {
                 const d = new Date(endDate);
-                d.setHours(t.getHours(), t.getMinutes());
+                d.setHours(t.getHours(), t.getMinutes(), 0, 0);
                 setEndDate(d);
               }
             }}
@@ -340,7 +376,7 @@ export default function ProjectRegisterScreen() {
                         setShowEditStartTimePicker(false);
                         if (t) {
                           const d = new Date(editStart);
-                          d.setHours(t.getHours(), t.getMinutes());
+                          d.setHours(t.getHours(), t.getMinutes(), 0, 0);
                           setEditStart(d);
                         }
                       }}
@@ -367,7 +403,7 @@ export default function ProjectRegisterScreen() {
                         setShowEditEndTimePicker(false);
                         if (t) {
                           const d = new Date(editEnd);
-                          d.setHours(t.getHours(), t.getMinutes());
+                          d.setHours(t.getHours(), t.getMinutes(), 0, 0);
                           setEditEnd(d);
                         }
                       }}
