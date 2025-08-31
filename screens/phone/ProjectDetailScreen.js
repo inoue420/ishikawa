@@ -14,7 +14,6 @@ import {
 } from 'react-native';
 import tw from 'twrnc';
 import * as ImagePicker from 'expo-image-picker';
-import { getAuth } from 'firebase/auth';
 
 import {
   fetchProjectById,
@@ -29,37 +28,35 @@ import {
   fetchEditLogs,
   addProjectComment,
   fetchProjectComments,
-  fetchUserByEmail,
+  findEmployeeByIdOrEmail,
 } from '../../firestoreService';
 
 export default function ProjectDetailScreen({ route }) {
-  const { projectId, date } = route.params; // 'YYYY-MM-DD'
-  // 送信者解決・ピッカー重複起動防止
+  // Navigator から渡す userEmail を受け取る（未渡しでも動くように ?? {} で安全化）
+  const { projectId, date, userEmail } = route.params ?? {}; // 'YYYY-MM-DD' + userEmail  // 送信者解決・ピッカー重複起動防止
   const [picking, setPicking] = useState(false);
 
   // 送信者を決定するヘルパー（by=従業員ID / byName=employees.name）
   const resolveCurrentUser = async () => {
     try {
-      if (me?.id) {
-        return { by: me.id, byName: me.name ?? null, source: 'state' };
+      // 1) state から
+      if (me?.id) return { by: me.id, byName: me.name ?? null, source: 'state' };
+      // 2) route.params.userEmail を最優先（doc.id / email / loginId で解決）
+      if (userEmail) {
+        const emp = await findEmployeeByIdOrEmail(String(userEmail));
+        if (emp) return { by: emp.id, byName: emp.name ?? null, source: 'route.userEmail' };
       }
-      const auth = getAuth();
-      const email = auth?.currentUser?.email ?? null;
-      const displayName = auth?.currentUser?.displayName ?? null;
-      if (email) {
-        const u = await fetchUserByEmail(email);
-        if (u) return { by: u.id, byName: u.name ?? null, source: 'employees(email)' };
-        return { by: email, byName: displayName ?? email.split('@')[0], source: 'auth-fallback' };
+      // 3) 従業員一覧が未取得なら取得してフォールバック      let emps = employees;
+      if (!emps || emps.length === 0) {
+        emps = await fetchAllUsers();
+        setEmployees(emps);
       }
-      // Auth が取れない環境のフォールバック
-      if (employees?.length === 1) {
-        const e = employees[0];
+      if (emps?.length === 1) {
+        const e = emps[0];
         return { by: e.id, byName: e.name ?? null, source: 'single-employee' };
       }
-      const admin = employees.find(e => e.role === 'admin') || employees.find(e => e.role === 'manager');
-      if (admin) {
-        return { by: admin.id, byName: admin.name ?? null, source: 'admin/manager' };
-      }
+      const admin = emps.find(e => e.role === 'admin') || emps.find(e => e.role === 'manager');
+      if (admin) return { by: admin.id, byName: admin.name ?? null, source: 'admin/manager' };
     } catch (e) {
       console.log('[resolveCurrentUser] error', e);
     }
@@ -122,38 +119,19 @@ export default function ProjectDetailScreen({ route }) {
         const emps = await fetchAllUsers();
         setEmployees(emps);
 
-        // ログインユーザー（編集者名の解決に使用）
+        // ログインユーザー（編集者名の解決）：userEmail を最優先で me にセット
         try {
-          const auth = getAuth();
-          const email = auth?.currentUser?.email ?? null;
-          const emailLocal = email ? email.split('@')[0] : null;
-          const displayName = auth?.currentUser?.displayName ?? null;
           let u = null;
-          if (email) {
-            // まずは完全一致 → ダメならローカル部でも検索（今回のDB構成に対応）
-            u = await fetchUserByEmail(email);
-            if (!u && emailLocal) u = await fetchUserByEmail(emailLocal);
+          if (userEmail) u = await findEmployeeByIdOrEmail(String(userEmail));
+          if (!u) {
+            const adminOrMgr = emps.find(e => e.role === 'admin' || e.role === 'manager');
+            u = adminOrMgr || emps[0] || null;
           }
           if (u) {
-            setMe(u); // employees の { id, name, ... }
-            console.log('[me] resolved from employees', u);
-          } else {
-            // Authが取れない/一致しない → employeesから代表者を選ぶ
-            const adminOrMgr = emps.find(e => e.role === 'admin' || e.role === 'manager');
-            const fallback = adminOrMgr || emps[0] || null;
-            if (fallback) {
-              setMe({ id: fallback.id, name: fallback.name });
-              console.log('[me] fallback employees', fallback);
-            } else if (email) {
-              setMe({ id: email, name: displayName || emailLocal || email });
-              console.log('[me] fallback auth only', email);
-            } else {
-              console.warn('[me] could not resolve user; will fallback to unknown at send-time');
-            }
+            setMe({ id: u.id, name: u.name });
+            console.log('[me] resolved', u);
           }
-        } catch (e) {
-          console.log('[me] resolve error', e);
-        }
+        } catch (e) { console.log('[me] resolve error', e); }
 
         // 資材記録（当日だけ抽出）
         const allMat = await fetchMaterialsRecords();
@@ -303,6 +281,7 @@ export default function ProjectDetailScreen({ route }) {
         style: 'destructive',
         onPress: async () => {
           try {
+            const { by, byName } = await resolveCurrentUser();
             await deleteProjectPhoto({ projectId, photoId: photo.id });
             await addEditLog({
               projectId,
@@ -310,8 +289,7 @@ export default function ProjectDetailScreen({ route }) {
               action: 'delete',
               target: 'photo',
               targetId: photo.id,
-              by: me?.id ?? null,
-              byName: me?.name ?? null,
+              by, byName,
             });
             const [ph, logs] = await Promise.all([
               listProjectPhotos(projectId, date),

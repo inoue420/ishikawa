@@ -125,14 +125,24 @@ export async function deleteProjectPhoto({ projectId, photoId }) {
 }
 
 export async function addEditLog({ projectId, date, action, target, targetId, by, byName }) {
+  // by/byName の整合性を担保：by は employees の doc.id に正規化し、byName が無ければ解決
+  let finalBy   = by ?? null;
+  let finalName = byName ?? null;
+  if (finalBy) {
+    const emp = await findEmployeeByIdOrEmail(finalBy);
+    if (emp) {
+      finalBy   = emp.id;                 // "b" など doc.id に統一
+      finalName = finalName ?? emp.name ?? null;
+    }
+  }
   const logsCol = collection(db, 'projects', projectId, 'editLogs');
   await addDoc(logsCol, {
     date,
     action,     // 'add' | 'delete'
     target,     // 'photo' など
     targetId,   // photo doc id
-    by: by ?? null,
-    byName: byName ?? null,
+    by: finalBy,
+    byName: finalName,
     at: serverTimestamp(),
   });
 }
@@ -147,13 +157,23 @@ export async function fetchEditLogs(projectId, date) {
 // ===== コメント追加/取得 =====
 
 export async function addProjectComment({ projectId, date, text, imageUrl, by, byName }) {
+  // by/byName の整合性を担保：by は employees の doc.id に正規化し、byName が無ければ解決
+  let finalBy   = by ?? null;
+  let finalName = byName ?? null;
+  if (finalBy) {
+    const emp = await findEmployeeByIdOrEmail(finalBy);
+    if (emp) {
+      finalBy   = emp.id;
+      finalName = finalName ?? emp.name ?? null;
+    }
+  }
   const commentsCol = collection(db, 'projects', projectId, 'comments');
   await addDoc(commentsCol, {
     date,
     text: text ?? '',
     imageUrl: imageUrl ?? null,
-    by: by ?? null,
-    byName: byName ?? null,
+    by: finalBy,
+    byName: finalName,
     at: serverTimestamp(),
   });
 }
@@ -258,7 +278,7 @@ export async function deleteProject(projectId) {
    // 発行/入金日時をサーバータイムスタンプで自動設定
    if (newStatus === 'issued') payload.issuedAt = serverTimestamp();
    if (newStatus === 'paid')   payload.paidAt   = serverTimestamp();
- await uploadBytes(fileRef, blob, { contentType: 'image/jpeg' });
+  return updateDoc(docRef, payload);
  }
 export async function updateBillingAmount(projectId, billingId, amount) {
   const docRef = doc(db, 'projects', projectId, 'billings', billingId);
@@ -429,18 +449,36 @@ export async function fetchUserByEmail(email) {
 // email でも loginId でも探せる従業員検索（移行期の両対応用）
 export async function findEmployeeByIdOrEmail(identifier) {
   if (!identifier) return null;
-  const id = identifier.trim().toLowerCase();
-  // 1) ドキュメントID（= 旧来の email）として取得
-  const direct = await getDoc(doc(employeesCol, id));
+  const key = identifier.trim().toLowerCase();
+  // 1) ドキュメントIDで一致
+  const direct = await getDoc(doc(employeesCol, key));
   if (direct.exists()) return { id: direct.id, ...direct.data() };
-  // 2) loginId フィールドで検索
-  const qy = query(employeesCol, where('loginId', '==', id));
-  const snaps = await getDocs(qy);
+  // 2) email フィールドで一致
+  const qEmail = query(employeesCol, where('email', '==', key));
+  let snaps = await getDocs(qEmail);
+  if (!snaps.empty) {
+    const d = snaps.docs[0];
+    return { id: d.id, ...d.data() };
+  }
+  // 3) loginId フィールドで一致（旧データ・テストデータ両対応）
+  const qLogin = query(employeesCol, where('loginId', '==', key));
+  snaps = await getDocs(qLogin);
   if (!snaps.empty) {
     const d = snaps.docs[0];
     return { id: d.id, ...d.data() };
   }
   return null;
+}
+
+// Auth から従業員を解決（email → ローカル部 → loginId 相当）
+export async function resolveEmployeeForAuth(authUser) {
+  const email = authUser?.email ?? '';
+  const local = email ? email.split('@')[0] : '';
+  return (
+    (email && await findEmployeeByIdOrEmail(email)) ||
+    (local && await findEmployeeByIdOrEmail(local)) ||
+    null
+  );
 }
 
 
