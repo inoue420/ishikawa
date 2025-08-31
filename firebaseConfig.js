@@ -1,6 +1,7 @@
 // firebaseConfig.js
-import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+ import { initializeApp, getApps, getApp } from "firebase/app";
+ import { getFirestore } from "firebase/firestore";
+ import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDn61Whz74PRXbCKMY2r1FqHmoMfZz8idA",
@@ -12,8 +13,7 @@ const firebaseConfig = {
   measurementId: "G-DL7V0BNQM9"
 };
 
-// Firebase を初期化
-const app = initializeApp(firebaseConfig);
-
-// Firestore インスタンス
-export const db = getFirestore(app);
+ // Firebase を初期化（ホットリロード対策）
+ const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+ export const db = getFirestore(app);
+ export const storage = getStorage(app);
