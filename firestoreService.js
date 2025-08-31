@@ -10,10 +10,12 @@ import {
   deleteDoc,
   query,
   where,
+  orderBy,  
   Timestamp,
   serverTimestamp,        
 } from 'firebase/firestore';
-import { db } from './firebaseConfig';
+import { ref as sRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { db, storage } from './firebaseConfig';
 
 // コレクション定義
 const usersCol           = collection(db, 'users');
@@ -23,6 +25,12 @@ const materialsListCol   = collection(db, 'materialsList');
 const materialsRecCol    = collection(db, 'materialsRecords');
 const companyProfileCol  = collection(db, 'companyProfile');
 const employeesCol       = collection(db, "employees");
+
+// 画像URI→Blob
+async function uriToBlob(uri) {
+  const res = await fetch(uri);
+  return await res.blob();
+}
 
 /** ============================================
  * Company Profile (会社情報)
@@ -71,6 +79,91 @@ export async function addUser(userData) {
  *   management   : string       // 管理担当社員ID
  *   participants  : string[] // 参加従業員の社員ID配列（複数）
  */
+
+// ===== 写真アップロード/一覧/削除/履歴 =====
+
+export async function uploadProjectPhoto({ projectId, date, localUri, uploadedBy }) {
+  const blob = await uriToBlob(localUri);
+ const id = (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function')
+   ? globalThis.crypto.randomUUID()
+   : String(Date.now());
+  const path = `projectPhotos/${projectId}/${date}/${id}.jpg`;
+  const fileRef = sRef(storage, path);
+  await uploadBytes(fileRef, blob);
+  const url = await getDownloadURL(fileRef);
+
+  const photosCol = collection(db, 'projects', projectId, 'photos');
+  const photoDocRef = await addDoc(photosCol, {
+    date,
+    path,
+    url,
+    uploadedBy: uploadedBy ?? null,
+    uploadedAt: serverTimestamp(),
+  });
+
+  return { id: photoDocRef.id, path, url };
+}
+
+export async function listProjectPhotos(projectId, date) {
+  const photosCol = collection(db, 'projects', projectId, 'photos');
+  const q = query(photosCol, where('date', '==', date), orderBy('uploadedAt', 'desc'));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function deleteProjectPhoto({ projectId, photoId }) {
+  const photoRef = doc(db, 'projects', projectId, 'photos', photoId);
+  const photoSnap = await getDoc(photoRef);
+  if (!photoSnap.exists()) return;
+
+  const { path } = photoSnap.data();
+  if (path) {
+   const fileRef = sRef(storage, path);
+   await deleteObject(fileRef).catch(() => {});
+  }
+  await deleteDoc(photoRef);
+}
+
+export async function addEditLog({ projectId, date, action, target, targetId, by, byName }) {
+  const logsCol = collection(db, 'projects', projectId, 'editLogs');
+  await addDoc(logsCol, {
+    date,
+    action,     // 'add' | 'delete'
+    target,     // 'photo' など
+    targetId,   // photo doc id
+    by: by ?? null,
+    byName: byName ?? null,
+    at: serverTimestamp(),
+  });
+}
+
+export async function fetchEditLogs(projectId, date) {
+  const logsCol = collection(db, 'projects', projectId, 'editLogs');
+  const q = query(logsCol, where('date', '==', date), orderBy('at', 'desc'));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+// ===== コメント追加/取得 =====
+
+export async function addProjectComment({ projectId, date, text, imageUrl, by, byName }) {
+  const commentsCol = collection(db, 'projects', projectId, 'comments');
+  await addDoc(commentsCol, {
+    date,
+    text: text ?? '',
+    imageUrl: imageUrl ?? null,
+    by: by ?? null,
+    byName: byName ?? null,
+    at: serverTimestamp(),
+  });
+}
+
+export async function fetchProjectComments(projectId, date) {
+  const commentsCol = collection(db, 'projects', projectId, 'comments');
+  const q = query(commentsCol, where('date', '==', date), orderBy('at', 'asc')); // 会話は昇順表示
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
 
 export async function fetchProjects() {
   const snaps = await getDocs(projectsCol);
@@ -165,7 +258,7 @@ export async function deleteProject(projectId) {
    // 発行/入金日時をサーバータイムスタンプで自動設定
    if (newStatus === 'issued') payload.issuedAt = serverTimestamp();
    if (newStatus === 'paid')   payload.paidAt   = serverTimestamp();
-   return await updateDoc(docRef, payload);
+ await uploadBytes(fileRef, blob, { contentType: 'image/jpeg' });
  }
 export async function updateBillingAmount(projectId, billingId, amount) {
   const docRef = doc(db, 'projects', projectId, 'billings', billingId);

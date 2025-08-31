@@ -12,11 +12,18 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    "plugins": [
+      ["expo-image-picker", {
+        "photosPermission": "写真を添付するためにフォトライブラリへのアクセスが必要です。"
+      }]
+    ],    
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.inoue420.ishikawa",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+       "NSPhotoLibraryUsageDescription": "写真を添付するためにフォトライブラリへのアクセスが必要です。",
+       "NSPhotoLibraryAddUsageDescription": "コメントに写真を添付・保存するために使用します。"        
       }
     },
     "android": {
