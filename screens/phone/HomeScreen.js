@@ -199,12 +199,16 @@ export default function HomeScreen({ navigation, route }) {
         )}
       </ScrollView>
 
-      {/* 既存機能（マネージャー専用ボタン） */}
-      {me?.role === 'manager' && me?.loginId && (
+      {/* 承認ボタン（部長/役員） */}
+      {me?.loginId && (me?.role === 'manager' || me?.role === 'executive') && (
         <View style={tw`p-4 border-t border-gray-200 bg-white`}>
           <Button
-            title="出勤認証（自分の部下のみ）"
-            onPress={() => navigation.navigate('ManagerApproval', { managerLoginId: me.loginId })}
+            title={me?.role === 'executive'
+              ? '出勤認証（直属の部長の申請）'
+              : '出勤認証（自分の部下のみ）'}
+            onPress={() =>
+              navigation.navigate('ManagerApproval', { managerLoginId: me.loginId, approverRole: me.role })
+            }
           />
         </View>
       )}

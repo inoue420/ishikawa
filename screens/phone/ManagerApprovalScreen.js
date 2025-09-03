@@ -3,7 +3,9 @@ import React, { useEffect, useState, useContext } from 'react';
 import { View, Text, Button, FlatList, TouchableOpacity, Alert } from 'react-native';
 import tw from 'twrnc';
 import { DateContext } from '../../DateContext';
-import { fetchPendingForManager, approvePunch, rejectPunch } from '../../firestoreService';
+import { fetchAllUsers, fetchPendingForManager, fetchPendingForManagers, approvePunch, rejectPunch } from '../../firestoreService';
+
+
 
 export default function ManagerApprovalScreen({ route }) {
   const managerLoginId = route.params?.managerLoginId ?? '';
@@ -12,14 +14,30 @@ export default function ManagerApprovalScreen({ route }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [methodMap, setMethodMap] = useState({}); // { [attendanceId]: 'in-person'|'phone'|'video' }
+  const [me, setMe] = useState(null);
+  const [byLoginId, setByLoginId] = useState(null);
 
   const dateKey = d => d.toISOString().slice(0, 10);
 
   const load = async () => {
     setLoading(true);
     try {
-      // その日の自分の部下の承認待ちを取得（サービス側でフィルタ）
-      const list = await fetchPendingForManager(managerLoginId, dateKey(selectedDate));
+      if (!byLoginId) throw new Error('users not loaded');
+      const self = me ?? byLoginId.get((managerLoginId || '').toLowerCase()) ?? null;
+      if (!self?.loginId) throw new Error('approver not resolved');
+
+      const targetDate = dateKey(selectedDate);
+      let list = [];
+      if (self.role === 'executive') {
+        // 直属の部長 loginId 群を抽出してまとめて取得
+        const managers = [...byLoginId.values()]
+          .filter(u => u?.managerLoginId === self.loginId && u?.role === 'manager')
+          .map(u => u.loginId)
+          .filter(Boolean);
+        list = await fetchPendingForManagers(managers, targetDate);
+      } else {
+        list = await fetchPendingForManager(self.loginId, targetDate);
+      }
       const data = (list ?? []).map(r => ({
         ...r,
         _ts: r?.timestamp?.toDate ? r.timestamp.toDate() : new Date(r.timestamp),
@@ -33,7 +51,25 @@ export default function ManagerApprovalScreen({ route }) {
     }
   };
 
-  useEffect(() => { load(); }, [selectedDate, managerLoginId]);
+  // 承認者（自分）と users を解決
+  useEffect(() => {
+    (async () => {
+      try {
+        const list = await fetchAllUsers();
+        const map = new Map();
+        for (const u of list) {
+          const lid = (u?.loginId || '').toLowerCase();
+          if (lid) map.set(lid, u);
+        }
+        setByLoginId(map);
+        setMe(map.get((managerLoginId || '').toLowerCase()) || null);
+      } catch (e) {
+        console.log('[ManagerApproval] users load error', e);
+      }
+    })();
+  }, [managerLoginId]);
+
+  useEffect(() => { if (byLoginId) load(); }, [selectedDate, managerLoginId, byLoginId, me]);
 
   const onApprove = async (id) => {
     try {
@@ -128,7 +164,9 @@ export default function ManagerApprovalScreen({ route }) {
     <View style={tw`flex-1 bg-gray-50`}>
       <View style={tw`p-4 border-b border-gray-200 bg-white`}>
         <Text style={tw`text-lg font-semibold`}>出勤認証（{dateKey(selectedDate)}）</Text>
-        {!!managerLoginId && <Text style={tw`text-xs text-gray-600`}>承認者: {managerLoginId}</Text>}
+        {!!managerLoginId && (
+          <Text style={tw`text-xs text-gray-600`}>承認者: {managerLoginId}{me?.role ? `（${me.role === 'executive' ? '役員' : me.role === 'manager' ? '部長' : me.role}）` : ''}</Text>
+        )}
       </View>
 
       <FlatList

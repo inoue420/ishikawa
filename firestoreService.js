@@ -433,7 +433,19 @@ export async function updateMaterialUsage(usageId, quantity) {
 export async function registerUser(data) {
   const email = data.email.trim().toLowerCase();
   const ref = doc(employeesCol, email);
-  await setDoc(ref, { ...data, email });
+  await setDoc(
+    ref,
+    {
+      role: 'employee',
+      department: '',
+      managerLoginId: '',
+      ...data,
+      email,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
 }
 
 /**
@@ -498,7 +510,7 @@ export async function fetchAllUsers() {
 export async function updateUser(email, data) {
   const lower = email.trim().toLowerCase();
   const ref = doc(employeesCol, lower);
-  return updateDoc(ref, data);
+  return updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
 }
 
 /**
@@ -540,7 +552,43 @@ export async function fetchAttendanceByEmployeeAndDate(employeeId, dateStr) {
     };
   });
 }
+// ========= 追加: users を map 化（byEmail / byLoginId） =========
+export async function fetchUsersMap() {
+  const snaps = await getDocs(employeesCol);
+  const list = [];
+  const byEmail = new Map();
+  const byLoginId = new Map();
+  snaps.docs.forEach(d => {
+    const u = { id: d.id, ...d.data() };
+    list.push(u);
+    const em = (u.email || '').toLowerCase();
+    const lid = (u.loginId || '').toLowerCase();
+    if (em) byEmail.set(em, u);
+    if (lid) byLoginId.set(lid, u);
+  });
+  return { list, byEmail, byLoginId };
+}
 
+// ========= 追加: 自分配下の loginId を抽出 =========
+export function getSubordinateLoginIdsOf(selfUser, allUsers) {
+  const out = new Set();
+  if (!selfUser?.loginId) return out;
+  const mine = selfUser.loginId;
+  // 直属（自分が上長）
+  for (const u of allUsers) {
+    if (u.managerLoginId === mine) out.add(u.loginId);
+  }
+  // 役員なら：直属の部長 + その配下の従業員
+  if (selfUser.role === 'executive') {
+    const managers = allUsers.filter(u => u.managerLoginId === mine && u.role === 'manager');
+    for (const m of managers) {
+      for (const u of allUsers) {
+        if (u.managerLoginId === m.loginId) out.add(u.loginId);
+      }
+    }
+  }
+  return out;
+}
 /**
  * 出退勤打刻（upsert）
  * 既存レコードがあれば timestamp 更新、なければ新規作成
@@ -608,6 +656,8 @@ export async function requestPunch({ employeeId, dateStr, type, time, alcoholChe
     affiliation: emp?.affiliation ?? null,
     managerLoginId: emp?.managerLoginId ?? null,  // ★ 正規化
     managerEmail: emp?.managerEmail ?? null,      // 互換のため残す（使わなくてもOK）
+    division: emp?.division ?? null,
+    department: emp?.division === '社員' ? (emp?.department ?? null) : null,
     date: dateStr,
     type,
     timestamp: now,
@@ -654,6 +704,42 @@ export async function fetchPendingForManager(managerLoginId, rangeOrDate) {
     return (ta - tb) || (a.type === 'in' ? -1 : 1);
   });
   return results;
+}
+
+// ── 追加: 複数上長（loginId 配列）の承認待ちを取得（役員向け）
+// Firestore where('in') は最大10要素までなのでグループ分割実行
+export async function fetchPendingForManagers(managerLoginIds, rangeOrDate) {
+  const ids = Array.from(new Set(managerLoginIds || [])).filter(Boolean);
+  if (ids.length === 0) return [];
+  let startDate, enWdDate;
+  if (typeof rangeOrDate === 'string') {
+    startDate = rangeOrDate;
+    endDate   = rangeOrDate;
+  } else if (rangeOrDate && typeof rangeOrDate === 'object') {
+    ({ startDate, endDate } = rangeOrDate);
+  }
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += 10) chunks.push(ids.slice(i, i + 10));
+  const all = [];
+  for (const group of chunks) {
+    const qAttendance = query(
+      attendanceCol,
+      where('status', '==', 'pending'),
+      where('managerLoginId', 'in', group),
+      ...(startDate ? [where('date', '>=', startDate)] : []),
+      ...(endDate   ? [where('date', '<=', endDate  )] : []),
+    );
+    const snap = await getDocs(qAttendance);
+    snap.docs.forEach(d => all.push({ id: d.id, ...d.data() }));
+  }
+  // ソート: 日付→時刻→type(in優先)
+  all.sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    const ta = a.timestamp?.toDate?.() || new Date(a.timestamp);
+    const tb = b.timestamp?.toDate?.() || new Date(b.timestamp);
+    return (ta - tb) || (a.type === 'in' ? -1 : 1);
+  });
+  return all;
 }
 
 // ── 上長: 承認
