@@ -45,6 +45,31 @@ const formatThousandsInput = (text) => {
   return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 };
 
+// ── 追加: コスト計算用の定数（式に埋め込み）
+const EMPLOYEE_HOURLY = 3000;   // 社員時給[円]
+const EXTERNAL_HOURLY = 3500;   // 外注時給[円]
+const RENTAL_PER_SQM  = 70000;  // レンタル・リソース費用 単価[円/m²]
+
+// 日付のみ（00:00）に正規化
+const dateOnly = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+// 包含日数（start～end を両端含む）
+const diffDaysInclusive = (start, end) =>
+  Math.floor((dateOnly(end) - dateOnly(start)) / 86400000) + 1;
+
+// 稼働時間の計算:
+// ・同一日の場合 … end-start の実時間（時間）
+// ・複数日の場合 … 日数×8時間
+const calcWorkHours = (start, end) => {
+  if (!start || !end) return 0;
+  const multi = start.toDateString() !== end.toDateString();
+  if (multi) {
+    const days = Math.max(1, diffDaysInclusive(start, end));
+    return days * 8;
+  }
+  const ms = end - start;
+  return ms > 0 ? (ms / 3600000) : 0;
+};
+
 export default function ProjectRegisterScreen() {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -134,6 +159,20 @@ export default function ProjectRegisterScreen() {
     if (!name.trim()) return Alert.alert('入力エラー', 'プロジェクト名を入力してください');
     if (!clientName.trim()) return Alert.alert('入力エラー', '顧客名を入力してください');
 
+    // ── 追加: 参加メンバーの内訳（外注/社員）
+    const participantObjs = employees.filter(e => participants.includes(e.id));
+    const externalCount = participantObjs.filter(e => (e?.division === '外注')).length;
+    const internalCount = participantObjs.length - externalCount;
+    // 稼働時間（複数日→日数×8h、同一日→実時間）
+    const hours = calcWorkHours(startDate, endDate);
+    // 人件費 = 社員×3000×h + 外注×3500×h（円）
+    const laborCost = Math.round(
+      internalCount * EMPLOYEE_HOURLY * hours +
+      externalCount * EXTERNAL_HOURLY * hours
+    );
+    // レンタル・リソース費用 = 平米 × 7万円（円）
+    const rentalResourceCost = Math.round((toNumberOrNull(areaSqm) || 0) * RENTAL_PER_SQM);
+
     // 数値化
     const payload = {
       name: name.trim(),
@@ -148,6 +187,11 @@ export default function ProjectRegisterScreen() {
       miscExpense: toNumberOrNull(miscExpense),   // 諸経費[円]
       areaSqm: toNumberOrNull(areaSqm),           // 平米[m^2]
       projectType: projectType,                   // 'new' | 'existing' | null
+      // 追加: 内部保持用の計算フィールド
+      laborCost,                                  // 人件費[円]（非表示/内部保持）
+      rentalResourceCost,                         // レンタル・リソース費用[円]（非表示/内部保持）
+      // 将来「どの日に誰が何時間か」を入力するための箱（他画面で編集可能）
+      workLogs: [],                               // 例: [{date:'2025-09-04', employeeId:'a@x', hours:4}]
     };
 
     setLoading(true);
