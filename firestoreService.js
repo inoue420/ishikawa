@@ -78,6 +78,13 @@ export async function addUser(userData) {
  *   design       : string       // 設計担当社員ID
  *   management   : string       // 管理担当社員ID
  *   participants  : string[] // 参加従業員の社員ID配列（複数）
+ *   orderAmount  : number|null  // 受注金額 [円]
+ *   travelCost   : number|null  // 交通費 [円]
+ *   miscExpense  : number|null  // 諸経費 [円]
+ *   areaSqm      : number|null  // 平米 [m^2]
+ *   projectType  : 'new'|'existing'|null // 新規/既存 区分
+ *   createdAt    : Timestamp    // 作成時刻（新規時）
+ *   updatedAt    : Timestamp    // 最終更新時刻
  */
 
 // ===== 写真アップロード/一覧/削除/履歴 =====
@@ -201,10 +208,12 @@ export async function setProject(projectId, projectData) {
   const dataToSave = {
     ...projectData,
     startDate: toTS(projectData.startDate),
-    // 単日の場合は null を明示保存（クエリ②で拾える）
-    endDate: toTS(projectData.endDate),
+    endDate:   toTS(projectData.endDate),
+    updatedAt: serverTimestamp(),
+    ...(projectId ? {} : { createdAt: serverTimestamp() }),
   };
-  return setDoc(docRef, dataToSave);
+  // 既存更新時は merge:true で未指定フィールド（今回追加の金額/面積/区分など）を消さない
+  return setDoc(docRef, dataToSave, projectId ? { merge: true } : undefined);
 }
 export async function fetchProjectsOverlappingRange(start, end) {
   const startTs = Timestamp.fromDate(start);
