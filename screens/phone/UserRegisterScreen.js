@@ -93,6 +93,25 @@ export default function UserRegisterScreen() {
       return Alert.alert('入力エラー', '部長の場合は上長（役員）を選択してください');
     }
 
+    // 追加：上長の役割を厳密チェック（誤配線防止）
+    const mgr = users.find(u => (u?.loginId || '').toLowerCase() === mgrId);
+    if (role === 'employee') {
+      if (!mgr || mgr.role !== 'manager') {
+        return Alert.alert('入力エラー', '従業員の上長は「部長」のみ選択できます。');
+      }
+    }
+    if (role === 'manager') {
+      if (!mgr || mgr.role !== 'executive') {
+        return Alert.alert('入力エラー', '部長の上長は「役員」のみ選択できます。');
+      }
+    }
+
+    // 大小文字の揺れを全て小文字に正規化（保険）
+    // ※既に loginId, mgrId は小文字化済みですが念のため。
+    const normalizedRole = role;
+    const normalizedDivision = division;
+    const normalizedDept = dept;
+
     setLoading(true);
     try {
       if (editingEmail) {

@@ -649,20 +649,32 @@ export async function fetchAttendanceHistory(employeeId, startDate, endDate) {
 export async function requestPunch({ employeeId, dateStr, type, time, alcoholCheck }) {
   const now = Timestamp.fromDate(time);
   const emp = await findEmployeeByIdOrEmail(employeeId);
+  const isExecutive = (emp?.role === 'executive');
+  const selfApproverLoginId = (emp?.loginId || emp?.email || '').toLowerCase();
+
   const payload = {
     employeeId,                 // 受け取ったID（メールでなくてもOK）
-    employeeLoginId: emp?.loginId ?? null,
+    employeeLoginId: (emp?.loginId ?? null)?.toLowerCase?.() ?? emp?.loginId ?? null,
     employeeName: emp?.name ?? null,
     affiliation: emp?.affiliation ?? null,
-    managerLoginId: emp?.managerLoginId ?? null,  // ★ 正規化
+    // 役員は承認者なし＝承認リストに出さない
+    managerLoginId: isExecutive ? '' : ((emp?.managerLoginId || '').toLowerCase()),
     managerEmail: emp?.managerEmail ?? null,      // 互換のため残す（使わなくてもOK）
     division: emp?.division ?? null,
     department: emp?.division === '社員' ? (emp?.department ?? null) : null,
     date: dateStr,
     type,
     timestamp: now,
-    status: "pending",
+    status: isExecutive ? 'approved' : 'pending',
     requestedAt: now,
+    ...(isExecutive ? {
+      approverLoginId: selfApproverLoginId,
+      approvedAt: serverTimestamp(),
+      managerApproval: {
+        method: 'auto',          // 表示時は「自動」にしておくのが分かりやすい
+        verifiedAt: serverTimestamp(),
+      },
+    } : {}),
     // ▼ 追加: アルコールチェック（UIで事前完了を必須に）
     ...(alcoholCheck ? {
       alcoholCheck: {
