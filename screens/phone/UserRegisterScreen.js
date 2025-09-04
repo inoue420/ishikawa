@@ -25,9 +25,31 @@ function roleLabel(value) {
   return f ? f.label : value ?? '従業員';
 }
 
+/** ====== 追加：loginId 自動生成ヘルパ ====== */
+// email のローカル部を小文字英数字に整形（英数以外は除去）
+function baseFromEmail(email = '') {
+  const local = (email.split('@')[0] || '').toLowerCase();
+  const cleaned = local.replace(/[^a-z0-9]/g, '');
+  return cleaned || 'user';
+}
+// 既存 users と重複しない loginId を生成（base, base01, base02 ...）
+function genUniqueLoginId(base, users) {
+  const used = new Set((users || []).map(u => (u.loginId || '').toLowerCase()).filter(Boolean));
+  if (!used.has(base)) return base;
+  let i = 1;
+  while (i < 1000) {
+    const suffix = i < 10 ? `0${i}` : `${i}`;
+    const cand = `${base}${suffix}`;
+    if (!used.has(cand)) return cand;
+    i++;
+  }
+  // 念のためのフォールバック
+  return `${base}${Date.now().toString().slice(-4)}`;
+}
+
 export default function UserRegisterScreen() {
   const [email, setEmail] = useState('');
-  const [loginId, setLoginId] = useState('');
+  const [loginId, setLoginId] = useState(''); // ★ 入力欄は出さない。内部保持のみ（編集時に既存を維持）
   const [name, setName] = useState('');
   const [affiliation, setAffiliation] = useState('');
   const [division, setDivision] = useState('');
@@ -74,7 +96,7 @@ export default function UserRegisterScreen() {
 
   const handleSubmit = async () => {
     const addr = email.trim().toLowerCase();
-    const login = loginId.trim().toLowerCase();
+    let   login = (loginId || '').trim().toLowerCase(); // ★ 入力は無いが内部で保持
     const mgrId = managerLoginId.trim().toLowerCase();
     const dept  = (division === '社員') ? department.trim() : '';
 
@@ -106,23 +128,24 @@ export default function UserRegisterScreen() {
       }
     }
 
-    // 大小文字の揺れを全て小文字に正規化（保険）
-    // ※既に loginId, mgrId は小文字化済みですが念のため。
-    const normalizedRole = role;
-    const normalizedDivision = division;
-    const normalizedDept = dept;
-
     setLoading(true);
     try {
       if (editingEmail) {
+        // 編集時は既存 loginId を維持（参照崩れ防止）
         await updateUser(editingEmail, {
-          loginId: login,
+          loginId: (login || '').toLowerCase(),
           name, affiliation, division, role,
           department: dept, // ★ 保存
           managerLoginId: (role === 'executive') ? '' : mgrId,
         });
         Alert.alert('更新完了', `${editingEmail} の情報を更新しました`);
       } else {
+        // 新規：loginId を自動生成（既存と重複しない）
+        if (!login) {
+          const base = baseFromEmail(addr);
+          login = genUniqueLoginId(base, users);
+          setLoginId(login); // 将来の安全のため state も更新
+        }
         const exists = await fetchUserByEmail(addr);
         if (exists) {
           Alert.alert('登録エラー', 'このメールアドレスは既に登録済みです');
@@ -155,7 +178,7 @@ export default function UserRegisterScreen() {
   const startEdit = (u) => {
     setEditingEmail(u.email);
     setEmail(u.email);
-    setLoginId(u.loginId ?? '');
+    setLoginId(u.loginId ?? ''); // ★ 内部保持のみ
     setName(u.name ?? '');
     setAffiliation(u.affiliation ?? '');
     setDivision(u.division ?? '');
@@ -227,14 +250,7 @@ export default function UserRegisterScreen() {
         </Picker>
       </View>
 
-      {/* ログインID */}
-      <TextInput
-        style={styles.input}
-        placeholder="ログインID（例：tanaka01）"
-        autoCapitalize="none"
-        value={loginId}
-        onChangeText={setLoginId}
-      />
+      {/* ★ ログインID入力欄は削除（内部で自動生成） */}
 
       {/* 役割 */}
       <Text style={styles.label}>役割</Text>
