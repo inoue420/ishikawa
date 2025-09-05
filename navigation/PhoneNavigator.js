@@ -11,7 +11,7 @@ import WIPScreen from '../screens/phone/WIPScreen';
 // BillingScreen は参照用として残すが、タブには登録しない
 // import BillingScreen from '../screens/phone/BillingScreen';
 import ProfileStackScreen from '../screens/phone/ProfileStackScreen';
-import OverallScreen from '../screens/phone/OverallScreen';
+import OverallStackNavigator from '../screens/phone/OverallStackNavigator';
 
 const Tab = createBottomTabNavigator();
 
@@ -42,7 +42,7 @@ export default function PhoneNavigator({ userEmail }) {
       {/* ★ 一番左に Overall を配置 */}
       <Tab.Screen
         name="Overall"
-        component={OverallScreen}
+        component={OverallStackNavigator}
         options={{ title: 'Overall' }}
       />
 

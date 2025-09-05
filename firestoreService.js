@@ -1,6 +1,7 @@
 // firestoreService.js
 import {
   collection,
+  collectionGroup,
   doc,
   getDocs,
   getDoc,
@@ -154,6 +155,43 @@ export async function addEditLog({ projectId, date, action, target, targetId, by
   });
 }
 
+// ▼ 追加：プロジェクト作成/更新/削除を既存 editLogs に記録（新設コレクションは作らない）
+export async function addProjectChangeLog({ projectId, action, by, byName, note = null }) {
+  // by/byName を employees に正規化（addEditLog と同等の扱い）
+  let finalBy   = by ?? null;
+  let finalName = byName ?? null;
+  if (finalBy) {
+    const emp = await findEmployeeByIdOrEmail(finalBy);
+    if (emp) {
+      finalBy   = emp.id;
+      finalName = finalName ?? emp.name ?? null;
+    }
+  }
+  const logsCol = collection(db, 'projects', projectId, 'editLogs');
+  await addDoc(logsCol, {
+    date: null,            // プロジェクト自体の履歴なので日付粒度は持たない
+    action,                // 'create' | 'update' | 'delete'
+    target: 'project',     // 横断一覧用のフィルタキー
+    targetId: projectId,
+    by: finalBy,
+    byName: finalName,
+    note: note ?? null,
+    at: serverTimestamp(),
+  });
+}
+
+// ▼ 追加：全プロジェクト横断の「プロジェクト変更履歴」を取得（新しい順）
+export async function fetchProjectChangeLogs(limitCount = 500) {
+  const qLogs = query(
+    collectionGroup(db, 'editLogs'),
+    where('target', '==', 'project'),
+    orderBy('at', 'desc')
+  );
+  const snap = await getDocs(qLogs);
+  const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return rows.slice(0, limitCount);
+}
+
 export async function fetchEditLogs(projectId, date) {
   const logsCol = collection(db, 'projects', projectId, 'editLogs');
   const q = query(logsCol, where('date', '==', date), orderBy('at', 'desc'));
@@ -202,7 +240,7 @@ export async function fetchProjectById(projectId) {
   if (!snap.exists()) return null;
   return { id: snap.id, ...snap.data() };
 }
-export async function setProject(projectId, projectData) {
+export async function setProject(projectId, projectData, actor) {
   const docRef = projectId ? doc(projectsCol, projectId) : doc(projectsCol);
   const toTS = (v) => (v instanceof Date ? Timestamp.fromDate(v) : v ?? null);
   const dataToSave = {
@@ -213,7 +251,18 @@ export async function setProject(projectId, projectData) {
     ...(projectId ? {} : { createdAt: serverTimestamp() }),
   };
   // 既存更新時は merge:true で未指定フィールド（今回追加の金額/面積/区分など）を消さない
-  return setDoc(docRef, dataToSave, projectId ? { merge: true } : undefined);
+  await setDoc(docRef, dataToSave, projectId ? { merge: true } : undefined);
+  // ▼ 変更履歴（create/update）を既存 editLogs に記録
+  try {
+    await addProjectChangeLog({
+      projectId: docRef.id,
+      action: projectId ? 'update' : 'create',
+      by: actor?.by ?? null,
+      byName: actor?.byName ?? null,
+      note: projectData?.name ? `プロジェクト「${projectData.name}」` : null,
+    });
+  } catch (_) { /* ログ失敗は致命傷にしない */ }
+  return;
 }
 export async function fetchProjectsOverlappingRange(start, end) {
   const startTs = Timestamp.fromDate(start);
@@ -260,9 +309,20 @@ export async function updateProjectRoles(projectId, rolesData) {
   return updateDoc(ref, rolesData);
 }
 
-export async function deleteProject(projectId) {
+export async function deleteProject(projectId, actor /* 任意: { by, byName } */) {
   const docRef = doc(projectsCol, projectId);
-  return deleteDoc(docRef);
+  // ▼ 先に削除ログを記録（親ドキュメント削除後でも subcollection 追加は可能だが、順序を明確化）
+  try {
+    await addProjectChangeLog({
+      projectId,
+      action: 'delete',
+      by: actor?.by ?? null,
+      byName: actor?.byName ?? null,
+      note: `projectId=${projectId}`,
+    });
+  } catch (_) {}
+  await deleteDoc(docRef);
+  return;
 }
  export async function fetchBillings(projectId) {
    const colRef = collection(db, 'projects', projectId, 'billings');

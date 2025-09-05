@@ -125,6 +125,7 @@ export default function OverallScreen({ navigation }) {
     { id: 'report', label: '報告', onPress: () => {}, enabled: false },
     { id: 'library', label: '図書', onPress: () => {}, enabled: false },
     { id: 'create', label: '作成', onPress: () => {}, enabled: false },
+    { id: 'changeLog', label: '編集履歴', onPress: () => navigation.navigate('ChangeLog'), enabled: true },
   ];
 
   const SmallButton = ({ item }) => (
@@ -137,10 +138,10 @@ export default function OverallScreen({ navigation }) {
           item.enabled ? `bg-blue-500` : `bg-gray-300`
         )}
       >
-        <Text style={tw`text-white text-sm font-bold`}>{item.label}</Text>
+        <Text style={tw`text-white text-sm font-bold`}><Text>{item.label}</Text></Text>
       </TouchableOpacity>
       {!item.enabled && (
-        <Text style={tw`mt-1 text-gray-600 text-xs`}>リンク未作成</Text>
+        <Text style={tw`mt-1 text-gray-600 text-xs`}><Text>リンク未作成</Text></Text>
       )}
     </View>
   );
