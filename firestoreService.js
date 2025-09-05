@@ -192,6 +192,19 @@ export async function addProjectChangeLog({ projectId, action, by, byName, note 
       finalName = finalName ?? emp.name ?? null;
     }
   }
+ // 最低限の埋め合わせ：両方 null の場合、Auth からローカル部だけでも拾う
+ if (!finalBy || !finalName) {
+   try {
+     const auth = getAuth();
+     const u = auth?.currentUser || null;
+     if (u?.email) {
+       const local = u.email.split('@')[0];
+       finalBy = finalBy ?? local ?? null;
+       finalName = finalName ?? local ?? null;
+     }
+   } catch {}
+ }
+
   const logsCol = collection(db, 'projects', projectId, 'editLogs');
   await addDoc(logsCol, {
     date: null,            // プロジェクト自体の履歴なので日付粒度は持たない
@@ -268,18 +281,25 @@ export async function fetchProjectById(projectId) {
 export async function setProject(projectId, projectData, actor) {
   const docRef = projectId ? doc(projectsCol, projectId) : doc(projectsCol);
   const toTS = (v) => (v instanceof Date ? Timestamp.fromDate(v) : v ?? null);
+ // 追加: 呼び出し側 or Auth から actor を確定
+  const actorResolved = await _resolveActorIfNeeded(actor);
   const dataToSave = {
     ...projectData,
     startDate: toTS(projectData.startDate),
     endDate:   toTS(projectData.endDate),
     updatedAt: serverTimestamp(),
-    ...(projectId ? {} : { createdAt: serverTimestamp() }),
+    updatedBy: actorResolved?.by ?? null,
+    updatedByName: actorResolved?.byName ?? null,
+    ...(projectId ? {} : {
+      createdAt: serverTimestamp(),
+      createdBy: actorResolved?.by ?? null,
+      createdByName: actorResolved?.byName ?? null,
+    }),
   };
   // 既存更新時は merge:true で未指定フィールド（今回追加の金額/面積/区分など）を消さない
   await setDoc(docRef, dataToSave, projectId ? { merge: true } : undefined);
   // ▼ 変更履歴（create/update）を既存 editLogs に記録
   try {
-    const actorResolved = await _resolveActorIfNeeded(actor);
     await addProjectChangeLog({
       projectId: docRef.id,
       action: projectId ? 'update' : 'create',

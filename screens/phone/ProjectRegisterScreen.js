@@ -19,8 +19,19 @@ import {
   setProject,
   deleteProject,
   fetchAllUsers,
+  resolveEmployeeForAuth,   // ★ 追加：自分解決に使う
 } from '../../firestoreService';
 import { Picker } from '@react-native-picker/picker';
+ import { auth } from '../../firebaseConfig';
+
+// --- 安全な日付ヘルパー群（追加） ---
+const toSafeDate = (v) => {
+  if (!v) return null;
+  const d = v?.toDate ? v.toDate() : new Date(v);
+  return (d instanceof Date && !isNaN(d)) ? d : null;
+};
+const fmtDate = (d) => d ? d.toLocaleDateString() : '-';
+const fmtTime = (d) => d ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--';
 
 const { width } = Dimensions.get('window');
 
@@ -74,6 +85,13 @@ export default function ProjectRegisterScreen() {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // ★ 追加：ログイン中の自分
+  const [me, setMe] = useState(null);
+  useEffect(() => {
+    const u = auth?.currentUser || null;
+    if (!u) return;
+    resolveEmployeeForAuth(u).then(setMe).catch(() => {});
+  }, []);
 
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
@@ -196,7 +214,8 @@ export default function ProjectRegisterScreen() {
 
     setLoading(true);
     try {
-      await setProject(null, payload);
+     // ★ 追加：actor を明示的に渡す
+     await setProject(null, payload, { by: me?.id, byName: me?.name });
       // クリア
       setName('');
       setClientName('');
@@ -256,7 +275,8 @@ export default function ProjectRegisterScreen() {
         onPress: async () => {
           setLoading(true);
           try {
-            await deleteProject(proj.id);
+           // ★ 追加：削除ログにも作成者/実行者を残す
+           await deleteProject(proj.id, { by: me?.id, byName: me?.name });
             setEditingIndex(-1);
             await loadProjects();
             Alert.alert('削除完了', 'プロジェクトを削除しました');
@@ -359,7 +379,11 @@ export default function ProjectRegisterScreen() {
         >
           <Picker.Item label="選択してください" value={null} />
           {employees.map(emp => (
-            <Picker.Item key={emp.id} label={emp.name} value={emp.id} />
+            <Picker.Item
+            key={emp.id}
+            label={String(emp?.name ?? emp?.id ?? '(no name)')}
+            value={emp.id}
+            />
           ))}
         </Picker>
 
@@ -446,7 +470,7 @@ export default function ProjectRegisterScreen() {
 
         <Text>開始予定時刻</Text>
         <TouchableOpacity onPress={() => setShowStartTimePicker(true)} style={tw`border p-2 mb-2`} activeOpacity={0.7}>
-          <Text>{startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+          <Text><Text>{fmtTime(startDate)}</Text></Text>
         </TouchableOpacity>
         {showStartTimePicker && (
           <DateTimePicker
@@ -525,23 +549,23 @@ export default function ProjectRegisterScreen() {
           <Text style={tw`text-center text-gray-500`}>プロジェクトがありません</Text>
         ) : (
           projects.map((proj, idx) => {
-            const sDate = new Date(proj.startDate?.toDate ? proj.startDate.toDate() : proj.startDate);
-            const eDate = new Date(proj.endDate?.toDate ? proj.endDate.toDate() : proj.endDate);
+            const sDate = toSafeDate(proj.startDate);
+            const eDate = toSafeDate(proj.endDate);
             return (
               <View key={proj.id} style={tw`bg-white p-3 rounded mb-2`}>
                 <TouchableOpacity
                   onPress={() => {
                     setEditingIndex(idx);
-                    setEditClient(proj.clientName);
-                    setEditStart(sDate);
-                    setEditEnd(eDate);
+                    setEditClient(proj.clientName ?? '');
+                    setEditStart(sDate ?? new Date());  // ← nullなら今の時刻で初期化
+                    setEditEnd(eDate ?? (sDate ?? new Date()));
                   }}
                   activeOpacity={0.7}
                 >
                   <Text style={tw`font-bold`}>{proj.name}</Text>
                   <Text>顧客: {proj.clientName}</Text>
-                  <Text>開始: {sDate.toLocaleDateString()}</Text>
-                  <Text>終了: {eDate.toLocaleDateString()}</Text>
+                  <Text>開始: <Text>{fmtDate(sDate)}</Text></Text>
+                  <Text>終了: <Text>{fmtDate(eDate)}</Text></Text>
                   {/* 参考表示（編集は ProjectDetail 側で対応予定） */}
                   <Text>区分: {proj.projectType === 'new' ? '新規' : proj.projectType === 'existing' ? '既存' : '-'}</Text>
                   <Text>受注金額: {proj.orderAmount ?? '-'}<Text> 円</Text></Text>
@@ -569,7 +593,7 @@ export default function ProjectRegisterScreen() {
                     </TouchableOpacity>
                     {showEditStart && (
                       <DateTimePicker
-                        value={editStart}
+                        value={toSafeDate(editStart) ?? new Date()}
                         mode="date"
                         display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                         onChange={(_, d) => { setShowEditStart(false); if (d) setEditStart(d); }}
@@ -586,7 +610,7 @@ export default function ProjectRegisterScreen() {
                     </TouchableOpacity>
                     {showEditStartTimePicker && (
                       <DateTimePicker
-                        value={editStart}
+                        value={toSafeDate(editStart) ?? new Date()}
                         mode="time"
                         display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                         onChange={(_, t) => {
@@ -610,7 +634,7 @@ export default function ProjectRegisterScreen() {
                     </TouchableOpacity>
                     {showEditEnd && (
                       <DateTimePicker
-                        value={editEnd}
+                        value={toSafeDate(editEnd) ?? new Date()}
                         mode="date"
                         display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                         onChange={(_, d) => { setShowEditEnd(false); if (d) setEditEnd(d); }}
@@ -627,7 +651,7 @@ export default function ProjectRegisterScreen() {
                     </TouchableOpacity>
                     {showEditEndTimePicker && (
                       <DateTimePicker
-                        value={editEnd}
+                        value={toSafeDate(editEnd) ?? new Date()}
                         mode="time"
                         display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                         onChange={(_, t) => {
