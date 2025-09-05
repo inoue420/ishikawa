@@ -17,6 +17,7 @@ import {
 } from 'firebase/firestore';
 import { ref as sRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage } from './firebaseConfig';
+import { getAuth } from 'firebase/auth';
 
 // コレクション定義
 const usersCol           = collection(db, 'users');
@@ -31,6 +32,30 @@ const employeesCol       = collection(db, "employees");
 async function uriToBlob(uri) {
   const res = await fetch(uri);
   return await res.blob();
+}
+
+/**
+ * actor({ by, byName }) が未指定でも、現在のAuthユーザーから従業員を解決して補完する
+ * - by    : employees の doc.id（見つからなければ email の小文字）
+ * - byName: 従業員名（見つからなければ email のローカル部）
+ */
+async function _resolveActorIfNeeded(actor) {
+  if (actor?.by && actor?.byName) return actor;
+  try {
+    const auth = getAuth();
+    const authUser = auth?.currentUser || null;
+    if (!authUser) return actor ?? null;
+    const emp = await resolveEmployeeForAuth(authUser);
+    return {
+      by: actor?.by ?? (emp?.id ?? (authUser.email?.toLowerCase?.() ?? null)),
+      byName:
+        actor?.byName ??
+        (emp?.name ??
+          (authUser.email ? authUser.email.split('@')[0] : null)),
+    };
+  } catch {
+    return actor ?? null;
+  }
 }
 
 /** ============================================
@@ -254,11 +279,12 @@ export async function setProject(projectId, projectData, actor) {
   await setDoc(docRef, dataToSave, projectId ? { merge: true } : undefined);
   // ▼ 変更履歴（create/update）を既存 editLogs に記録
   try {
+    const actorResolved = await _resolveActorIfNeeded(actor);
     await addProjectChangeLog({
       projectId: docRef.id,
       action: projectId ? 'update' : 'create',
-      by: actor?.by ?? null,
-      byName: actor?.byName ?? null,
+      by: actorResolved?.by ?? null,
+      byName: actorResolved?.byName ?? null,
       note: projectData?.name ? `プロジェクト「${projectData.name}」` : null,
     });
   } catch (_) { /* ログ失敗は致命傷にしない */ }
@@ -313,11 +339,12 @@ export async function deleteProject(projectId, actor /* 任意: { by, byName } *
   const docRef = doc(projectsCol, projectId);
   // ▼ 先に削除ログを記録（親ドキュメント削除後でも subcollection 追加は可能だが、順序を明確化）
   try {
+    const actorResolved = await _resolveActorIfNeeded(actor);
     await addProjectChangeLog({
       projectId,
       action: 'delete',
-      by: actor?.by ?? null,
-      byName: actor?.byName ?? null,
+      by: actorResolved?.by ?? null,
+      byName: actorResolved?.byName ?? null,
       note: `projectId=${projectId}`,
     });
   } catch (_) {}
@@ -849,5 +876,41 @@ export async function rejectPunch(recordId, approverLoginId, note = "") {
     rejectedAt: serverTimestamp(),
     note,
   });
+}
+
+// ▼ 追加：範囲指定で横断の「プロジェクト変更履歴」を取得（新しい順）
+//   - まずはサーバーで絞り込み（target=='project' && at範囲 && orderBy('at','desc')）
+//   - もし複合インデックス未作成等で失敗したら、全件取得→クライアント側フィルタにフォールバック
+export async function fetchProjectChangeLogsInRange(startDate, endDate, limitCount = 1000) {
+  const startTs = Timestamp.fromDate(startDate);
+  const endTs   = Timestamp.fromDate(endDate);
+
+  try {
+    const qLogs = query(
+      collectionGroup(db, 'editLogs'),
+      where('target', '==', 'project'),
+      where('at', '>=', startTs),
+      where('at', '<=', endTs),
+      orderBy('at', 'desc'),
+    );
+    const snap = await getDocs(qLogs);
+    const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return rows.slice(0, limitCount);
+  } catch (e) {
+    // フォールバック：まず target=='project' で取得 → 日付絞り
+    const qLogs2 = query(
+      collectionGroup(db, 'editLogs'),
+      where('target', '==', 'project'),
+      orderBy('at', 'desc')
+    );
+    const snap2 = await getDocs(qLogs2);
+    const rows2 = snap2.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(r => {
+        const dt = r.at?.toDate ? r.at.toDate() : (r.at ? new Date(r.at) : null);
+        return dt && dt >= startDate && dt <= endDate;
+      });
+    return rows2.slice(0, limitCount);
+  }
 }
 
