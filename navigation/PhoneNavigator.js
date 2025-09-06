@@ -44,13 +44,15 @@ export default function PhoneNavigator({ userEmail }) {
         name="Overall"
         component={OverallStackNavigator}
         options={{ title: 'Overall' }}
+        initialParams={{ userEmail }} // ★ 追加：Overall配下にも userEmail を伝搬
       />
 
-      <Tab.Screen 
-       name="Schedule" 
-       component={ScheduleScreen} 
-       options={{ title: 'スケジュール' }}
-       />
+      <Tab.Screen
+        name="Schedule"
+        component={ScheduleScreen}
+        options={{ title: 'スケジュール' }}
+        initialParams={{ userEmail }} // ★ 追加
+      />
 
       {/* ★ その右に Home を配置 */}
       <Tab.Screen
@@ -71,16 +73,19 @@ export default function PhoneNavigator({ userEmail }) {
         name="Materials"
         component={MaterialsScreen}
         options={{ title: '資機材' }}
+        initialParams={{ userEmail }}      
       />
       <Tab.Screen
         name="WIP"
         component={WIPScreen}
         options={{ title: 'WIP' }}
+        initialParams={{ userEmail }} // ★ 追加
       />
       <Tab.Screen
         name="Profile"
         component={ProfileStackScreen}
         options={{ title: 'プロフィール' }}
+        initialParams={{ userEmail }} // ★ 追加
       />
 
       {/* Billing はタブに出さない（参考用にファイルは残す） */}

@@ -6,17 +6,21 @@ import ChangeLog from './ChangeLog';
 
 const Stack = createStackNavigator();
 
-export default function OverallStackNavigator() {
+export default function OverallStackNavigator({ route }) {
+  const userEmail = route?.params?.userEmail ?? null;
+  console.log('[OverallStack] route.params.userEmail =', userEmail); 
   return (
     <Stack.Navigator>
         <Stack.Screen
         name="OverallMain"
         component={OverallScreen}
+        initialParams={{ userEmail }}
         options={{ title: 'Overall', headerShown: false }}
         />
       <Stack.Screen
         name="ChangeLog"
         component={ChangeLog}
+        initialParams={{ userEmail }}
         options={{ title: '変更履歴' }}
       />
     </Stack.Navigator>

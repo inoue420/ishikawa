@@ -11,33 +11,40 @@ import ExportSettingsScreen   from './ExportSettingsScreen';
 
 const ProfileStack = createStackNavigator();
 
-export default function ProfileStackScreen() {
+export default function ProfileStackScreen({ route }) {
+  const userEmail = route?.params?.userEmail ?? null;
+  console.log('[ProfileStack] route.params.userEmail =', userEmail);
   return (
     <ProfileStack.Navigator screenOptions={{ headerTitleAlign: 'center' }}>
       <ProfileStack.Screen
         name="ProfileMain"
         component={ProfileScreen}
         options={{ title: 'プロフィール' }}
+        initialParams={{ userEmail }}
       />
       <ProfileStack.Screen
         name="UserRegister"
         component={UserRegisterScreen}
         options={{ title: 'ユーザー登録' }}
+        initialParams={{ userEmail }}
       />
       <ProfileStack.Screen
         name="MaterialRegister"
         component={MaterialRegisterScreen}
         options={{ title: '資材登録' }}
+        initialParams={{ userEmail }}
       />
       <ProfileStack.Screen
         name="ProjectRegister"
         component={ProjectRegisterScreen}
         options={{ title: 'プロジェクト登録' }}
+        initialParams={{ userEmail }}
       />
       <ProfileStack.Screen
         name="ExportSettings"
         component={ExportSettingsScreen}
         options={{ title: 'CSV出力設定' }}
+        initialParams={{ userEmail }}
       />
     </ProfileStack.Navigator>
   );

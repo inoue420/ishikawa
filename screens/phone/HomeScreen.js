@@ -7,6 +7,7 @@ import { DateContext } from '../../DateContext';
 import { fetchProjects, findEmployeeByIdOrEmail } from '../../firestoreService';
 
 export default function HomeScreen({ navigation, route }) {
+  console.log('[HomeScreen] got userEmail =', route?.params?.userEmail);
   const { date: selectedDate, setDate } = useContext(DateContext);
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState([]);

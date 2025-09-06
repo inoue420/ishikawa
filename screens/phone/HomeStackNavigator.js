@@ -19,11 +19,16 @@ export default function HomeStackNavigator({ route }) {
        initialParams={{ userEmail }}  // ★ HomeScreen へ引き継ぎ
      />
       {/* プロジェクト詳細画面 */}
-      <Stack.Screen    name="ProjectDetail"   component={ProjectDetailScreen}      />
+      <Stack.Screen
+        name="ProjectDetail"
+        component={ProjectDetailScreen}
+        initialParams={{ userEmail }} // ★ 追加：詳細からの作成/編集でも実行者名を解決
+      />
      <Stack.Screen
        name="ManagerApproval"
        component={ManagerApprovalScreen}
        options={{ title: '承認(上長)' }}
+       initialParams={{ userEmail }} // ★ 追加
      />
     </Stack.Navigator>
   );

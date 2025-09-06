@@ -12,8 +12,8 @@ import { createStackNavigator } from '@react-navigation/stack';
 const RootStack = createStackNavigator();
 
 function MainNavigator({ route }) {
-  console.log('[MainNavigator] route.params:', route.params);
-  const { userEmail } = route.params || {};
+  console.log('[MainNavigator] route.params:', route?.params);
+  const { userEmail } = route?.params || {};
   console.log('[MainNavigator] userEmail:', userEmail);
   const isTablet = useIsTablet();
   return isTablet ? <TabletNavigator userEmail={ userEmail } /> : <PhoneNavigator   userEmail={ userEmail } />;
