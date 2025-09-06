@@ -12,8 +12,6 @@ import { fetchProjectsOverlappingRange } from '../../firestoreService'; // â˜… è
 export default function OverallScreen({ navigation, route }) {
   const { date: selectedDate, setDate } = useContext(DateContext);
   const [showPicker, setShowPicker] = useState(false);
-  console.log('[OverallScreen] got userEmail =', route?.params?.userEmail);
-
   const onDateChange = (_event, d) => {
     setShowPicker(false);
     if (d) setDate(d);

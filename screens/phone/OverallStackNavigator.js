@@ -8,7 +8,6 @@ const Stack = createStackNavigator();
 
 export default function OverallStackNavigator({ route }) {
   const userEmail = route?.params?.userEmail ?? null;
-  console.log('[OverallStack] route.params.userEmail =', userEmail); 
   return (
     <Stack.Navigator>
         <Stack.Screen

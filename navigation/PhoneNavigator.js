@@ -16,8 +16,6 @@ import OverallStackNavigator from '../screens/phone/OverallStackNavigator';
 const Tab = createBottomTabNavigator();
 
 export default function PhoneNavigator({ userEmail }) {
-  console.log('[PhoneNavigator] props.userEmail:', userEmail);
-
   return (
     <Tab.Navigator
       initialRouteName="Overall" // ★ログイン後の初期タブをOverallへ

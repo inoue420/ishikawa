@@ -13,7 +13,6 @@ const ProfileStack = createStackNavigator();
 
 export default function ProfileStackScreen({ route }) {
   const userEmail = route?.params?.userEmail ?? null;
-  console.log('[ProfileStack] route.params.userEmail =', userEmail);
   return (
     <ProfileStack.Navigator screenOptions={{ headerTitleAlign: 'center' }}>
       <ProfileStack.Screen

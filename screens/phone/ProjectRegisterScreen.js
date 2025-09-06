@@ -23,7 +23,6 @@ import {
   findEmployeeByIdOrEmail,  // ★ 追加：userEmail からの解決に使う
 } from '../../firestoreService';
 import { Picker } from '@react-native-picker/picker';
-import { auth } from '../../firebaseConfig';
 
 // --- 安全な日付ヘルパー群（追加） ---
 const toSafeDate = (v) => {
@@ -93,34 +92,11 @@ export default function ProjectRegisterScreen({ route }) {
     (async () => {
       const emailFromRoute =
         route?.params?.userEmail ? String(route.params.userEmail).toLowerCase() : null;
-      console.log('[PRS] route.params.userEmail =', emailFromRoute);
-      if (emailFromRoute) {
-        const emp = await findEmployeeByIdOrEmail(emailFromRoute);
-        console.log('[PRS] findEmployeeByIdOrEmail ->', emp);
-        if (emp) {
-          setMe(emp);
-          return;
-        }
-      }
-      try {
-        // ★ 直に getAuth() せず、firebaseConfig から import した auth を使う
-        const u = auth?.currentUser || null;
-        console.log('[PRS] auth.currentUser =', u?.email || u?.uid || null);
-        if (u) {
-          const emp = await resolveEmployeeForAuth(u);
-          console.log('[PRS] resolveEmployeeForAuth ->', emp);
-          if (emp) setMe(emp);
-        }
-      } catch (e) {
-        console.log('[PRS] resolve me failed:', e);
-      }
+      if (!emailFromRoute) return;
+      const emp = await findEmployeeByIdOrEmail(emailFromRoute);
+      if (emp) setMe(emp);
     })();
   }, [route?.params?.userEmail]);
-
-  // me が入ったかを確認
-  useEffect(() => {
-    if (me) console.log('[PRS] me resolved:', { id: me?.id, email: me?.email, name: me?.name, loginId: me?.loginId });
-  }, [me]);
 
   // me が変わったら中身を確認
   useEffect(() => {
@@ -256,20 +232,11 @@ export default function ProjectRegisterScreen({ route }) {
 
     setLoading(true);
     try {
-      // ★ 重要：actor を冗長に作る（name が欠けたら従業員一覧から補完）
-      const fallbackNameFromList =
-        employees.find(e => e?.id === (me?.id ?? route?.params?.userEmail))?.name ?? null;
       const actor = {
-        by:     me?.id ?? me?.email ?? route?.params?.userEmail ?? null,
-        byName: me?.name ?? me?.loginId ?? fallbackNameFromList ?? null, // ← employees.name を最優先
+        by:     me?.id ?? route?.params?.userEmail ?? null,
+        byName: me?.name ?? null,
       };
-      console.log('[PRS] actor to setProject =', actor);
-
-      await setProject(
-        null,
-        payload,
-        { ...actor, actor } // ← 実装差異に強くするため両形式で渡す
-      );
+      await setProject(null, payload, actor);
 
       // クリア
       setName('');
