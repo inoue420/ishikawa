@@ -115,6 +115,7 @@ export default function ProjectRegisterScreen({ route }) {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState(null);
 
   // ★ ログイン中の自分（Auth未使用でも userEmail から特定）
   const [me, setMe] = useState(null);
@@ -208,18 +209,11 @@ export default function ProjectRegisterScreen({ route }) {
     setRefreshing(false);
   }, [loadProjects]);
 
-// ─────────────────────────────────────────────
-// 事前入力（コピー / 編集）:
-//   - mode === 'copy' && initialValues: 左の新規フォームに流し込む
-//   - mode === 'edit' && projectId: 右リストの該当行を編集モードで開く
-// ─────────────────────────────────────────────
-useEffect(() => {
-  const params = route?.params ?? {};
-
-  // 1) コピー → 左フォームへ反映
-  if (params.mode === 'copy' && params.initialValues) {
-    const src = params.initialValues;
-    setName(src.name ? `${src.name} (コピー)` : '');
+  // ─────────────────────────────
+  // 左フォームに値を流し込むヘルパー
+  // ─────────────────────────────
+  const prefillLeftForm = useCallback((src, { appendCopySuffix = false } = {}) => {
+    setName(src.name ? (appendCopySuffix ? `${src.name} (コピー)` : src.name) : '');
     setClientName(src.clientName ?? '');
     const s = toSafeDate(src.startDate) ?? roundToHour(new Date());
     const e = toSafeDate(src.endDate) ?? s;
@@ -235,20 +229,36 @@ useEffect(() => {
     setDesign(src.design ?? PH);
     setManagement(src.management ?? PH);
     setParticipants(Array.isArray(src.participants) ? src.participants : []);
+  }, []);  
+
+  // ─────────────────────────────────────────────
+  // 事前入力（コピー / 編集）:
+  // - copy: 左フォームに流し込む
+  // - edit: 左フォームにも流し込み、送信で上書き保存できるようにする
+  //   （従来の右リストのインライン編集も動くが、左フォーム編集を優先）
+  // ─────────────────────────────────────────────
+
+useEffect(() => {
+  const params = route?.params ?? {};
+
+  // 1) コピー → 左フォームへ反映
+  if (params.mode === 'copy' && params.initialValues) {
+    prefillLeftForm(params.initialValues, { appendCopySuffix: true });
   }
 
-  // 2) 編集 → 右リストの該当行を編集モードへ（projectsが読み込まれてから）
-  if (params.mode === 'edit' && params.projectId && projects.length > 0) {
-    const idx = projects.findIndex(p => p.id === params.projectId);
-    if (idx >= 0) {
-      const proj = projects[idx];
-      setEditingIndex(idx);
-      setEditClient(proj.clientName ?? '');
-      setEditStart(toSafeDate(proj.startDate) ?? new Date());
-      setEditEnd(toSafeDate(proj.endDate) ?? (toSafeDate(proj.startDate) ?? new Date()));
+    // 2) 編集：左フォームを既存値でプリフィルして、上書き保存できるようにする
+    if (params.mode === 'edit' && params.projectId) {
+      setEditingProjectId(params.projectId);
+      if (params.initialValues) {
+        // Detail から初期値が来ている場合はそれを採用
+        prefillLeftForm(params.initialValues);
+      } else if (projects.length > 0) {
+        // プロジェクト一覧ロード後に埋める
+        const proj = projects.find(p => p.id === params.projectId);
+        if (proj) prefillLeftForm(proj);
+      }
     }
-  }
-}, [route?.params, projects]);
+}, [route?.params, projects, prefillLeftForm]);
 
 
 
@@ -262,7 +272,7 @@ useEffect(() => {
     is24Hour: true,
   };
 
-  const handleAdd = async () => {
+  const handleSubmit = async () => {
     // 担当の未選択チェック
     if ([sales, survey, design, management].some(v => v === PH)) {
       return Alert.alert('入力エラー', 'すべての役割を「選択してください」以外に設定してください');
@@ -311,29 +321,36 @@ useEffect(() => {
         by:     me?.id ?? route?.params?.userEmail ?? null,
         byName: me?.name ?? null,
       };
-      await setProject(null, payload, actor);
-
-      // クリア
-      setName('');
-      setClientName('');
-      setStartDate(roundToHour(new Date()));
-      setEndDate(roundToHour(new Date()));
-      setParticipants([]);
-      setOrderAmount('');
-      setTravelCost('');
-      setMiscExpense('');
-      setAreaSqm('');
-      setProjectType(null);
-      setSales(PH);
-      setSurvey(PH);
-      setDesign(PH);
-      setManagement(PH);
-
-      await loadProjects();
-      Alert.alert('成功', 'プロジェクトを追加しました');
+      if (editingProjectId) {
+        // ← 編集：上書き更新
+        await setProject(editingProjectId, payload, actor);
+        await loadProjects();
+        Alert.alert('成功', 'プロジェクトを更新しました');
+        setEditingProjectId(null);
+      } else {
+        // ← 新規追加
+        await setProject(null, payload, actor);
+        // クリア
+        setName('');
+        setClientName('');
+        setStartDate(roundToHour(new Date()));
+        setEndDate(roundToHour(new Date()));
+        setParticipants([]);
+        setOrderAmount('');
+        setTravelCost('');
+        setMiscExpense('');
+        setAreaSqm('');
+        setProjectType(null);
+        setSales(PH);
+        setSurvey(PH);
+        setDesign(PH);
+        setManagement(PH);
+        await loadProjects();
+        Alert.alert('成功', 'プロジェクトを追加しました');
+      }
     } catch (e) {
       console.error(e);
-      Alert.alert('エラー', 'プロジェクトの追加に失敗しました');
+      Alert.alert('エラー', editingProjectId ? 'プロジェクトの更新に失敗しました' : 'プロジェクトの追加に失敗しました');
     } finally {
       setLoading(false);
     }
@@ -408,7 +425,9 @@ useEffect(() => {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
-        <Text style={tw`text-lg font-bold mb-2`}>プロジェクト追加</Text>
+        <Text style={tw`text-lg font-bold mb-2`}>
+          {editingProjectId ? 'プロジェクト編集' : 'プロジェクト追加'}
+        </Text>
 
         <Text>プロジェクト名</Text>
         <TextInput
@@ -634,7 +653,15 @@ useEffect(() => {
           />
         )}
 
-        <PrimaryButton title={loading ? '処理中...' : '追加'} onPress={handleAdd} disabled={loading} />
+        <PrimaryButton
+          title={
+            loading
+              ? (editingProjectId ? '更新中...' : '処理中...')
+              : (editingProjectId ? '更新' : '追加')
+          }
+          onPress={handleSubmit}
+          disabled={loading}
+        />
       </ScrollView>
 
       {/* 右カラム：プロジェクト一覧 */}

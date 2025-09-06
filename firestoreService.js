@@ -134,6 +134,19 @@ export async function uploadProjectPhoto({ projectId, date, localUri, uploadedBy
     uploadedAt: serverTimestamp(),
   });
 
+  // 画像追加の履歴を editLogs にも記録
+  try {
+    await addEditLog({
+      projectId,
+      date,
+      action: 'add',
+      target: 'photo',
+      targetId: photoDocRef.id,
+      by: uploadedBy?.by ?? uploadedBy ?? null,
+      byName: uploadedBy?.byName ?? null,
+    });
+  } catch (_) {}  
+
   return { id: photoDocRef.id, path, url };
 }
 
@@ -155,6 +168,16 @@ export async function deleteProjectPhoto({ projectId, photoId }) {
    await deleteObject(fileRef).catch(() => {});
   }
   await deleteDoc(photoRef);
+  // 画像削除の履歴
+  try {
+    await addEditLog({
+      projectId,
+      date: null,
+      action: 'delete',
+      target: 'photo',
+      targetId: photoId,
+    });
+  } catch (_) {}
 }
 
 export async function addEditLog({ projectId, date, action, target, targetId, by, byName }) {
@@ -181,7 +204,7 @@ export async function addEditLog({ projectId, date, action, target, targetId, by
 }
 
 // ▼ 追加：プロジェクト作成/更新/削除を既存 editLogs に記録（新設コレクションは作らない）
-export async function addProjectChangeLog({ projectId, action, by, byName, note = null }) {
+export async function addProjectChangeLog({ projectId, action, by, byName, note = null, projectName = null }) {
   // by/byName を employees に正規化（addEditLog と同等の扱い）
   let finalBy   = by ?? null;
   let finalName = byName ?? null;
@@ -214,6 +237,7 @@ export async function addProjectChangeLog({ projectId, action, by, byName, note 
     by: finalBy,
     byName: finalName,
     note: note ?? null,
+    projectName: projectName ?? null,  // ← 名称を保持（削除後も表示可能）
     at: serverTimestamp(),
   });
 }
@@ -251,7 +275,7 @@ export async function addProjectComment({ projectId, date, text, imageUrl, by, b
     }
   }
   const commentsCol = collection(db, 'projects', projectId, 'comments');
-  await addDoc(commentsCol, {
+  const commentRef = await addDoc(commentsCol, {
     date,
     text: text ?? '',
     imageUrl: imageUrl ?? null,
@@ -259,6 +283,18 @@ export async function addProjectComment({ projectId, date, text, imageUrl, by, b
     byName: finalName,
     at: serverTimestamp(),
   });
+  // コメント追加の履歴
+  try {
+    await addEditLog({
+      projectId,
+      date,
+      action: 'add',
+      target: 'comment',
+      targetId: commentRef.id,
+      by: finalBy,
+      byName: finalName,
+    });
+  } catch (_) {}
 }
 
 export async function fetchProjectComments(projectId, date) {
@@ -306,6 +342,7 @@ export async function setProject(projectId, projectData, actor) {
       by: actorResolved?.by ?? null,
       byName: actorResolved?.byName ?? null,
       note: projectData?.name ? `プロジェクト「${projectData.name}」` : null,
+      projectName: projectData?.name ?? null,
     });
   } catch (_) { /* ログ失敗は致命傷にしない */ }
   return;
@@ -357,7 +394,13 @@ export async function updateProjectRoles(projectId, rolesData) {
 
 export async function deleteProject(projectId, actor /* 任意: { by, byName } */) {
   const docRef = doc(projectsCol, projectId);
-  // ▼ 先に削除ログを記録（親ドキュメント削除後でも subcollection 追加は可能だが、順序を明確化）
+  // ▼ 削除前に名称を取得してログへ保持
+  let nameForLog = null;
+  try {
+    const snap = await getDoc(docRef);
+    nameForLog = snap.exists() ? (snap.data()?.name ?? null) : null;
+  } catch (_) {}
+  // 先に削除ログを記録
   try {
     const actorResolved = await _resolveActorIfNeeded(actor);
     await addProjectChangeLog({
@@ -365,7 +408,8 @@ export async function deleteProject(projectId, actor /* 任意: { by, byName } *
       action: 'delete',
       by: actorResolved?.by ?? null,
       byName: actorResolved?.byName ?? null,
-      note: `projectId=${projectId}`,
+      note: nameForLog ? `プロジェクト「${nameForLog}」を削除` : `projectId=${projectId}`,
+      projectName: nameForLog ?? null,
     });
   } catch (_) {}
   await deleteDoc(docRef);
@@ -933,4 +977,36 @@ export async function fetchProjectChangeLogsInRange(startDate, endDate, limitCou
     return rows2.slice(0, limitCount);
   }
 }
-
+// ▼新規：コメント/画像も含めた横断履歴を範囲取得（project/comment/photo）
+export async function fetchAllChangeLogsInRange(startDate, endDate, limitCount = 1000) {
+  const startTs = Timestamp.fromDate(startDate);
+  const endTs   = Timestamp.fromDate(endDate);
+  const targets = ['project', 'comment', 'photo'];
+  try {
+    const qLogs = query(
+      collectionGroup(db, 'editLogs'),
+      where('target', 'in', targets),
+      where('at', '>=', startTs),
+      where('at', '<=', endTs),
+      orderBy('at', 'desc'),
+    );
+    const snap = await getDocs(qLogs);
+    const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return rows.slice(0, limitCount);
+  } catch (e) {
+    // フォールバック：targetフィルタなしで取得→クライアント側で絞る
+    const qLogs2 = query(
+      collectionGroup(db, 'editLogs'),
+      orderBy('at', 'desc'),
+    );
+    const snap2 = await getDocs(qLogs2);
+    const rows2 = snap2.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(r => targets.includes(r.target))
+      .filter(r => {
+        const dt = r.at?.toDate ? r.at.toDate() : (r.at ? new Date(r.at) : null);
+        return dt && dt >= startDate && dt <= endDate;
+      });
+    return rows2.slice(0, limitCount);
+  }
+}

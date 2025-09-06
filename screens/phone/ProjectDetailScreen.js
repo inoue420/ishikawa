@@ -289,13 +289,34 @@ export default function ProjectDetailScreen({ route }) {
   // 追加：右上メニュー（編集・コピー・削除）
   const openActionMenu = useCallback(() => {
     const onEdit = () => {
-      // 編集：ProjectRegisterScreenへ遷移（必要に応じて画面名を調整）
+      // 編集：登録フォームに既存値を事前入力して遷移
+      const src = project || {};
       navigation.navigate('Profile', {
         screen: 'ProjectRegister',
         params: {
           mode: 'edit',
-          projectId: project?.id,
+          projectId: src?.id,
           userEmail: userEmail ?? null,
+          initialValues: {
+            name: src.name ?? null,
+            clientName: src.clientName ?? null,
+            startDate: toDateMaybe(src.startDate),
+            endDate: toDateMaybe(src.endDate),
+            sales: src.sales ?? null,
+            survey: src.survey ?? null,
+            design: src.design ?? null,
+            management: src.management ?? null,
+            participants: Array.isArray(src.participants) ? [...src.participants] : [],
+            orderAmount: src.orderAmount ?? null,
+            travelCost: src.travelCost ?? null,
+            miscExpense: src.miscExpense ?? null,
+            areaSqm: src.areaSqm ?? null,
+            projectType: src.projectType ?? null,
+            invoiceAmount: src.invoiceAmount ?? null,
+            invoiceStatus: src.invoiceStatus ?? null,
+            isMilestoneBilling: src.isMilestoneBilling ?? null,
+            status: src.status ?? null,
+          },
         },
       });
     };

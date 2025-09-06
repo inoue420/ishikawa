@@ -4,7 +4,7 @@ import { View, Text, ActivityIndicator, SectionList, TouchableOpacity } from 're
 import DateTimePicker from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
 import {
-  fetchProjectChangeLogsInRange,
+  fetchAllChangeLogsInRange,
   fetchProjects,
 } from '../../firestoreService';
 
@@ -85,13 +85,13 @@ export default function ChangeLog() {
       // 今日分（0:00〜23:59）全件
       const t0 = startOfDay(new Date());
       const t1 = endOfDay(new Date());
-      const today = await fetchProjectChangeLogsInRange(t0, t1, 1000);
+      const today = await fetchAllChangeLogsInRange(t0, t1, 1000);
       setTodayLogs(today || []);
 
       // 過去分（ユーザー指定期間）。UI仕様: 「昨日まで」「任意期間」を対象
       // ※from/to は画面の状態値を使用
       if (fromDate && toDate) {
-        const past = await fetchProjectChangeLogsInRange(startOfDay(fromDate), endOfDay(toDate), 2000);
+        const past = await fetchAllChangeLogsInRange(startOfDay(fromDate), endOfDay(toDate), 2000);
         setPastLogs(past || []);
       } else {
         setPastLogs([]);
@@ -223,9 +223,18 @@ export default function ChangeLog() {
     const hhmm = at ? `${String(at.getHours()).padStart(2,'0')}:${String(at.getMinutes()).padStart(2,'0')}` : '';
     const by = item?.byName || item?.by || 'unknown';
     const pid = item?.targetId || item?.projectId;
+    const name = item?.projectName || pnameOf(pid);
     const actionLabel = ACTION_LABEL[item?.action] ?? item?.action ?? '';
-
-    const message = `${by}さんが「${pnameOf(pid)}」を${actionLabel}しました`;
+    let message = '';
+    if (item?.target === 'project') {
+      message = `${by}さんが「${name}」を${actionLabel}しました`;
+    } else if (item?.target === 'comment') {
+      message = `${by}さんが「${name}」にコメントを追加しました`;
+    } else if (item?.target === 'photo') {
+      message = `${by}さんが「${name}」の画像を${item?.action === 'delete' ? '削除' : '追加'}しました`;
+    } else {
+      message = `${by}さんが「${name}」に変更を加えました`;
+    }
 
     return (
       <View style={tw`px-4 py-3 border-b border-gray-200 bg-white flex-row`}>
