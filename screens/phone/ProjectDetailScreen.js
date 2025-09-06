@@ -290,49 +290,46 @@ export default function ProjectDetailScreen({ route }) {
   const openActionMenu = useCallback(() => {
     const onEdit = () => {
       // 編集：ProjectRegisterScreenへ遷移（必要に応じて画面名を調整）
-      // Profileタブ配下のStackにいるため、ネスト指定で確実に遷移
       navigation.navigate('Profile', {
         screen: 'ProjectRegister',
         params: {
+          mode: 'edit',
           projectId: project?.id,
-          initialValues: project ?? null,
           userEmail: userEmail ?? null,
         },
       });
     };
 
-    const onCopy = async () => {
-      try {
-        const { by, byName } = await resolveCurrentUser();
-        const src = project || {};
-        const newData = {
-          // ---- 基本情報（存在するものを引き継ぎ）----
-          name: `${src.name || src.title || '無名プロジェクト'} (コピー)`,
-          clientName: src.clientName ?? null,
-          startDate: toDateMaybe(src.startDate) ?? src.startDate ?? null,
-          endDate: toDateMaybe(src.endDate) ?? src.endDate ?? null,
-          sales: src.sales ?? null,
-          survey: src.survey ?? null,
-          design: src.design ?? null,
-          management: src.management ?? null,
-          participants: Array.isArray(src.participants) ? [...src.participants] : [],
-          // ---- 任意の数値・属性系（存在すれば継承）----
-          orderAmount: src.orderAmount ?? null,
-          travelCost: src.travelCost ?? null,
-          miscExpense: src.miscExpense ?? null,
-          areaSqm: src.areaSqm ?? null,
-          projectType: src.projectType ?? null,
-          invoiceAmount: src.invoiceAmount ?? null,
-          invoiceStatus: src.invoiceStatus ?? null,
-          isMilestoneBilling: src.isMilestoneBilling ?? null,
-          status: src.status ?? null,
-        };
-        await upsertProject(null, newData, { by, byName }); // 新規作成（履歴は内部で自動記録）
-        Alert.alert('コピーしました', '同一内容の新規プロジェクトを作成しました。');
-      } catch (e) {
-        console.error('copy error', e);
-        Alert.alert('コピーに失敗しました');
-      }
+    const onCopy = () => {
+      // コピー：登録画面の左フォームを事前入力して遷移（ここでは作成しない）
+      const src = project || {};
+      navigation.navigate('Profile', {
+        screen: 'ProjectRegister',
+        params: {
+          mode: 'copy',
+          userEmail: userEmail ?? null,
+          initialValues: {
+            name: src.name ?? null,
+            clientName: src.clientName ?? null,
+            startDate: toDateMaybe(src.startDate),
+            endDate: toDateMaybe(src.endDate),
+            sales: src.sales ?? null,
+            survey: src.survey ?? null,
+            design: src.design ?? null,
+            management: src.management ?? null,
+            participants: Array.isArray(src.participants) ? [...src.participants] : [],
+            orderAmount: src.orderAmount ?? null,
+            travelCost: src.travelCost ?? null,
+            miscExpense: src.miscExpense ?? null,
+            areaSqm: src.areaSqm ?? null,
+            projectType: src.projectType ?? null,
+            invoiceAmount: src.invoiceAmount ?? null,
+            invoiceStatus: src.invoiceStatus ?? null,
+            isMilestoneBilling: src.isMilestoneBilling ?? null,
+            status: src.status ?? null,
+          },
+        },
+      });
     };
 
     const onDelete = async () => {

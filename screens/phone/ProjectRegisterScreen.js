@@ -208,6 +208,50 @@ export default function ProjectRegisterScreen({ route }) {
     setRefreshing(false);
   }, [loadProjects]);
 
+// ─────────────────────────────────────────────
+// 事前入力（コピー / 編集）:
+//   - mode === 'copy' && initialValues: 左の新規フォームに流し込む
+//   - mode === 'edit' && projectId: 右リストの該当行を編集モードで開く
+// ─────────────────────────────────────────────
+useEffect(() => {
+  const params = route?.params ?? {};
+
+  // 1) コピー → 左フォームへ反映
+  if (params.mode === 'copy' && params.initialValues) {
+    const src = params.initialValues;
+    setName(src.name ? `${src.name} (コピー)` : '');
+    setClientName(src.clientName ?? '');
+    const s = toSafeDate(src.startDate) ?? roundToHour(new Date());
+    const e = toSafeDate(src.endDate) ?? s;
+    setStartDate(s);
+    setEndDate(e);
+    setProjectType(src.projectType ?? null);
+    setOrderAmount(src.orderAmount != null ? formatThousandsInput(String(src.orderAmount)) : '');
+    setTravelCost(src.travelCost != null ? formatThousandsInput(String(src.travelCost)) : '');
+    setMiscExpense(src.miscExpense != null ? formatThousandsInput(String(src.miscExpense)) : '');
+    setAreaSqm(src.areaSqm != null ? String(src.areaSqm) : '');
+    setSales(src.sales ?? PH);
+    setSurvey(src.survey ?? PH);
+    setDesign(src.design ?? PH);
+    setManagement(src.management ?? PH);
+    setParticipants(Array.isArray(src.participants) ? src.participants : []);
+  }
+
+  // 2) 編集 → 右リストの該当行を編集モードへ（projectsが読み込まれてから）
+  if (params.mode === 'edit' && params.projectId && projects.length > 0) {
+    const idx = projects.findIndex(p => p.id === params.projectId);
+    if (idx >= 0) {
+      const proj = projects[idx];
+      setEditingIndex(idx);
+      setEditClient(proj.clientName ?? '');
+      setEditStart(toSafeDate(proj.startDate) ?? new Date());
+      setEditEnd(toSafeDate(proj.endDate) ?? (toSafeDate(proj.startDate) ?? new Date()));
+    }
+  }
+}, [route?.params, projects]);
+
+
+
   // ─────────────────────────────────────────────
   // 時刻ピッカー：ボックスタップですぐ選択 → 選択と同時に即閉じる
   // iOS: spinner, Android: clock（24h）
