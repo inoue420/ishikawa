@@ -1,5 +1,5 @@
 // src/screens/phone/ProjectDetailScreen.js
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useLayoutEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
   Platform,
 } from 'react-native';
 import tw from 'twrnc';
+import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 
 import {
@@ -29,9 +30,22 @@ import {
   addProjectComment,
   fetchProjectComments,
   findEmployeeByIdOrEmail,
+  setProject as upsertProject,
+  deleteProject,  
 } from '../../firestoreService';
 
+// 追加：Firestore Timestamp/Date を安全に Date|null へ
+const toDateMaybe = (v) => {
+  if (!v) return null;
+  try {
+    return v?.toDate ? v.toDate() : new Date(v);
+  } catch {
+    return null;
+  }
+};
+
 export default function ProjectDetailScreen({ route }) {
+  const navigation = useNavigation();
   // Navigator から渡す userEmail を受け取る（未渡しでも動くように ?? {} で安全化）
   const { projectId, date, userEmail } = route.params ?? {}; // 'YYYY-MM-DD' + userEmail  // 送信者解決・ピッカー重複起動防止
   const [picking, setPicking] = useState(false);
@@ -271,6 +285,100 @@ export default function ProjectDetailScreen({ route }) {
       setSending(false);
     }
   };
+
+  // 追加：右上メニュー（編集・コピー・削除）
+  const openActionMenu = useCallback(() => {
+    const onEdit = () => {
+      // 編集：ProjectRegisterScreenへ遷移（必要に応じて画面名を調整）
+      // Profileタブ配下のStackにいるため、ネスト指定で確実に遷移
+      navigation.navigate('Profile', {
+        screen: 'ProjectRegister',
+        params: {
+          projectId: project?.id,
+          initialValues: project ?? null,
+          userEmail: userEmail ?? null,
+        },
+      });
+    };
+
+    const onCopy = async () => {
+      try {
+        const { by, byName } = await resolveCurrentUser();
+        const src = project || {};
+        const newData = {
+          // ---- 基本情報（存在するものを引き継ぎ）----
+          name: `${src.name || src.title || '無名プロジェクト'} (コピー)`,
+          clientName: src.clientName ?? null,
+          startDate: toDateMaybe(src.startDate) ?? src.startDate ?? null,
+          endDate: toDateMaybe(src.endDate) ?? src.endDate ?? null,
+          sales: src.sales ?? null,
+          survey: src.survey ?? null,
+          design: src.design ?? null,
+          management: src.management ?? null,
+          participants: Array.isArray(src.participants) ? [...src.participants] : [],
+          // ---- 任意の数値・属性系（存在すれば継承）----
+          orderAmount: src.orderAmount ?? null,
+          travelCost: src.travelCost ?? null,
+          miscExpense: src.miscExpense ?? null,
+          areaSqm: src.areaSqm ?? null,
+          projectType: src.projectType ?? null,
+          invoiceAmount: src.invoiceAmount ?? null,
+          invoiceStatus: src.invoiceStatus ?? null,
+          isMilestoneBilling: src.isMilestoneBilling ?? null,
+          status: src.status ?? null,
+        };
+        await upsertProject(null, newData, { by, byName }); // 新規作成（履歴は内部で自動記録）
+        Alert.alert('コピーしました', '同一内容の新規プロジェクトを作成しました。');
+      } catch (e) {
+        console.error('copy error', e);
+        Alert.alert('コピーに失敗しました');
+      }
+    };
+
+    const onDelete = async () => {
+      Alert.alert('削除しますか？', 'このプロジェクトを削除します。復元はできません。', [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: '削除',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { by, byName } = await resolveCurrentUser();
+              await deleteProject(project?.id, { by, byName }); // 履歴は内部で自動記録
+              Alert.alert('削除しました');
+              navigation.goBack();
+            } catch (e) {
+              console.error('delete project error', e);
+              Alert.alert('削除に失敗しました');
+            }
+          },
+        },
+      ]);
+    };
+
+    Alert.alert(
+      '操作を選択',
+      '',
+      [
+        { text: '編集', onPress: onEdit },
+        { text: 'コピー', onPress: onCopy },
+        { text: '削除', style: 'destructive', onPress: onDelete },
+        { text: 'キャンセル', style: 'cancel' },
+      ],
+      { cancelable: true },
+    );
+  }, [navigation, project, userEmail, resolveCurrentUser]);
+
+  // 追加：ヘッダー右上にメニュー（⋯）を設置
+  useLayoutEffect(() => {
+    navigation?.setOptions?.({
+      headerRight: () => (
+       <TouchableOpacity onPress={openActionMenu} style={tw`mr-3 px-2 py-1`}>
+          <Text style={tw`text-xl`}>⋯</Text>
+        </TouchableOpacity>
+      ),
+    });
+  }, [navigation, openActionMenu]);
 
   // 画像削除（一覧から個別削除）
   const handleDeletePhoto = async (photo) => {
