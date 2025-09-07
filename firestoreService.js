@@ -18,6 +18,31 @@ import {
 import { ref as sRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage } from './firebaseConfig';
 import { getAuth } from 'firebase/auth';
+import * as FileSystem from 'expo-file-system';
+import { initializeApp, getApp } from 'firebase/app';
+ 
+
+// Base64 -> Uint8Array（atob/Buffer 非依存で動く純JSデコーダ）
+function base64ToUint8Array(b64) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+  let str = b64.replace(/[\r\n\s]/g, '');
+  let bytes = [];
+  let enc1, enc2, enc3, enc4;
+  let i = 0;
+  while (i < str.length) {
+    enc1 = chars.indexOf(str.charAt(i++));
+    enc2 = chars.indexOf(str.charAt(i++));
+    enc3 = chars.indexOf(str.charAt(i++));
+    enc4 = chars.indexOf(str.charAt(i++));
+    const chr1 = (enc1 << 2) | (enc2 >> 4);
+    const chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
+    const chr3 = ((enc3 & 3) << 6) | enc4;
+    bytes.push(chr1);
+    if (enc3 !== 64 && enc3 !== -1) bytes.push(chr2);
+    if (enc4 !== 64 && enc4 !== -1) bytes.push(chr3);
+  }
+  return new Uint8Array(bytes);
+}
 
 // コレクション定義
 const usersCol           = collection(db, 'users');
@@ -28,10 +53,27 @@ const materialsRecCol    = collection(db, 'materialsRecords');
 const companyProfileCol  = collection(db, 'companyProfile');
 const employeesCol       = collection(db, "employees");
 
-// 画像URI→Blob
-async function uriToBlob(uri) {
-  const res = await fetch(uri);
-  return await res.blob();
+// 画像URI→Blob（安全版：fetch 失敗時は FileSystem Base64 にフォールバック）
+async function uriToBlob(uri, mimeHint = 'image/jpeg') {
+  console.log('[uriToBlob] start', { uri: String(uri).slice(0, 60), mimeHint });
+  if (!uri) throw new Error('uriToBlob: uri is empty');
+  try {
+    const res = await fetch(uri);
+    const b = await res.blob();
+    // 一部端末で type が空になるため保険で差し替え
+    const out = b.type ? b : b.slice(0, b.size, mimeHint);
+    console.log('[uriToBlob] via fetch', { size: out.size, type: out.type });
+    return out;
+  } catch (e) {
+    // Android の content:// 等で fetch が失敗するケースに対応
+    console.log('[uriToBlob] fetch failed; fallback to FileSystem:', e?.message || e);
+    const b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+    // atob / Buffer に依存しない純JS変換
+    const u8 = base64ToUint8Array(b64);
+    const out = new Blob([u8], { type: mimeHint });
+    console.log('[uriToBlob] via FileSystem', { size: out.size, type: out.type });
+    return out;
+  }
 }
 
 /**
@@ -116,21 +158,63 @@ export async function addUser(userData) {
 // ===== 写真アップロード/一覧/削除/履歴 =====
 
 export async function uploadProjectPhoto({ projectId, date, localUri, uploadedBy }) {
-  const blob = await uriToBlob(localUri);
- const id = (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function')
-   ? globalThis.crypto.randomUUID()
-   : String(Date.now());
-  const path = `projectPhotos/${projectId}/${date}/${id}.jpg`;
+  console.log('[uploadProjectPhoto] start', { projectId, date, localUri, uploadedBy });
+  // 必須チェック（パスに undefined が混入すると storage/unknown になりやすい）
+  if (!projectId) throw new Error('uploadProjectPhoto: projectId is required');
+  if (!date)      throw new Error('uploadProjectPhoto: date is required');
+  if (!localUri)  throw new Error('uploadProjectPhoto: localUri is required');
+
+  // 拡張子と contentType を推定（HEIC/PNG/JPG 想定）
+  const cleanUri = String(localUri).split('?')[0];
+  const extRaw = (cleanUri.split('.').pop() || 'jpg').toLowerCase();
+  const ext = /^(heic|heif|png|jpg|jpeg)$/.test(extRaw) ? extRaw : 'jpg';
+  const contentType =
+    ext === 'png'  ? 'image/png'  :
+    ext === 'heic' || ext === 'heif' ? 'image/heic' :
+    'image/jpeg';
+    console.log('[uploadProjectPhoto] detect', { cleanUri, extRaw, ext, contentType });
+
+  // Blob 化（安全版）
+  const blob = await uriToBlob(localUri, contentType);
+  console.log('[uploadProjectPhoto] blob ready', { size: blob.size, type: blob.type });
+
+  // ファイル名生成（既存の Storage ルートは踏襲）
+  const id = (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function')
+    ? globalThis.crypto.randomUUID()
+    : String(Date.now());
+  const path = `projectPhotos/${projectId}/${date}/${id}.${ext === 'jpeg' ? 'jpg' : ext}`;
   const fileRef = sRef(storage, path);
-  await uploadBytes(fileRef, blob);
+  // ランタイムでのバケット確認
+  try {
+    const bucket = storage?.app?.options?.storageBucket;
+    console.log('[uploadProjectPhoto] bucket/path', { bucket, path });
+  } catch (_) {}
+
+  // contentType を必ず付与
+  try {
+    await uploadBytes(fileRef, blob, {
+      contentType,
+      customMetadata: {
+        projectId,
+        date,
+        uploadedBy: (typeof uploadedBy === 'object' ? (uploadedBy.by ?? uploadedBy.byName) : uploadedBy) ?? 'unknown',
+      },
+    });
+    console.log('[uploadProjectPhoto] uploadBytes OK', { path });
+  } catch (e) {
+    const full = JSON.stringify(e, Object.getOwnPropertyNames(e));
+    console.log('[uploadProjectPhoto] uploadBytes ERROR', full);
+    throw e;
+  }
   const url = await getDownloadURL(fileRef);
+  console.log('[uploadProjectPhoto] getDownloadURL OK', { url: String(url).slice(0, 80) });
 
   const photosCol = collection(db, 'projects', projectId, 'photos');
   const photoDocRef = await addDoc(photosCol, {
     date,
     path,
     url,
-    uploadedBy: uploadedBy ?? null,
+    uploadedBy: (typeof uploadedBy === 'object' ? (uploadedBy.by ?? uploadedBy.byName) : uploadedBy) ?? null,
     uploadedAt: serverTimestamp(),
   });
 
@@ -142,8 +226,8 @@ export async function uploadProjectPhoto({ projectId, date, localUri, uploadedBy
       action: 'add',
       target: 'photo',
       targetId: photoDocRef.id,
-      by: uploadedBy?.by ?? uploadedBy ?? null,
-      byName: uploadedBy?.byName ?? null,
+      by: (typeof uploadedBy === 'object' ? uploadedBy.by : uploadedBy) ?? null,
+      byName: (typeof uploadedBy === 'object' ? uploadedBy.byName : null) ?? null,
     });
   } catch (_) {}  
 
@@ -165,7 +249,9 @@ export async function deleteProjectPhoto({ projectId, photoId }) {
   const { path } = photoSnap.data();
   if (path) {
    const fileRef = sRef(storage, path);
-   await deleteObject(fileRef).catch(() => {});
+   await deleteObject(fileRef).catch((e) => {
+     console.warn('[deleteProjectPhoto] deleteObject warning:', e?.message || e);
+   });
   }
   await deleteDoc(photoRef);
   // 画像削除の履歴
@@ -883,7 +969,7 @@ export async function fetchPendingForManager(managerLoginId, rangeOrDate) {
 export async function fetchPendingForManagers(managerLoginIds, rangeOrDate) {
   const ids = Array.from(new Set(managerLoginIds || [])).filter(Boolean);
   if (ids.length === 0) return [];
-  let startDate, enWdDate;
+  let startDate, endDate;
   if (typeof rangeOrDate === 'string') {
     startDate = rangeOrDate;
     endDate   = rangeOrDate;
@@ -1008,5 +1094,40 @@ export async function fetchAllChangeLogsInRange(startDate, endDate, limitCount =
         return dt && dt >= startDate && dt <= endDate;
       });
     return rows2.slice(0, limitCount);
+  }
+}
+/**
+ * 環境診断ログ（バケット名/認証/リージョンなど）
+ */
+export function debugStorageEnv() {
+  try {
+    const app = getApp();
+    const auth = getAuth();
+    const uid = auth?.currentUser?.uid ?? null;
+    const email = auth?.currentUser?.email ?? null;
+    const bucket = storage?.app?.options?.storageBucket ?? null;
+    console.log('[debugStorageEnv]', { uid, email, bucket, appName: app?.name });
+  } catch (e) {
+    console.log('[debugStorageEnv] error', e?.message || e);
+  }
+}
+
+/**
+ * 文字列アップロードのプローブ：ルール/バケットの切り分け用
+ */
+import { uploadString } from 'firebase/storage';
+export async function __testUploadPlainText(projectId, date) {
+  const path = `projectPhotos/${projectId}/${date}/__probe.txt`;
+  const fileRef = sRef(storage, path);
+  const content = `probe ${new Date().toISOString()}`;
+  try {
+    await uploadString(fileRef, content, 'raw', { contentType: 'text/plain' });
+    const url = await getDownloadURL(fileRef);
+    console.log('[__testUploadPlainText] OK', { path, url });
+    return { ok: true, url };
+  } catch (e) {
+    const full = JSON.stringify(e, Object.getOwnPropertyNames(e));
+    console.log('[__testUploadPlainText] ERROR', full);
+    return { ok: false, error: e?.message || String(e) };
   }
 }

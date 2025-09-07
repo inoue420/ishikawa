@@ -231,18 +231,21 @@ export default function ProjectDetailScreen({ route }) {
     if (!commentText && !pendingImage) return;
     setSending(true);
     try {
+      console.log('[handleSend] params', { projectId, date, hasImg: !!pendingImage, textLen: commentText?.length ?? 0 });
       const { by, byName, source } = await resolveCurrentUser();
       console.log('[send] sender', { by, byName, source, hasImage: !!pendingImage });
       let uploadedUrl = null;
 
       // 添付があれば先にアップロード → 写真コレクション → 履歴
       if (pendingImage?.uri) {
+        console.log('[handleSend] upload start', { uri: pendingImage.uri });
         const { id: photoId, url } = await uploadProjectPhoto({
           projectId,
           date,
           localUri: pendingImage.uri,
           uploadedBy: by,
         });
+        console.log('[handleSend] upload done', { photoId, url: String(url).slice(0, 80) });
         uploadedUrl = url;
         await addEditLog({
           projectId,

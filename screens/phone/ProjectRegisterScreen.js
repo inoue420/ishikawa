@@ -1,11 +1,10 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo  } from 'react';
 import {
   View,
   Text,
   TextInput,
   Alert,
   ScrollView,
-  Dimensions,
   TouchableOpacity,
   Platform,
   RefreshControl,
@@ -15,14 +14,10 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import {
   fetchProjects,
   setProject,
-  deleteProject,
   fetchAllUsers,
-  resolveEmployeeForAuth,
   findEmployeeByIdOrEmail,
 } from '../../firestoreService';
 import { Picker } from '@react-native-picker/picker';
-
-const { width } = Dimensions.get('window');
 
 // --- 共通ボタン（Textで包む） ---
 function PrimaryButton({ title, onPress, disabled, danger }) {
@@ -42,18 +37,6 @@ function PrimaryButton({ title, onPress, disabled, danger }) {
   );
 }
 
-// --- サブボタン ---
-function OutlineButton({ title, onPress }) {
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.7}
-      style={tw`rounded px-4 py-2 items-center border border-gray-300 bg-white`}
-    >
-      <Text style={tw`text-gray-800`}>{title}</Text>
-    </TouchableOpacity>
-  );
-}
 
 // --- 安全な日付ヘルパー群 ---
 const toSafeDate = (v) => {
@@ -61,7 +44,6 @@ const toSafeDate = (v) => {
   const d = v?.toDate ? v.toDate() : new Date(v);
   return (d instanceof Date && !isNaN(d)) ? d : null;
 };
-const fmtDate = (d) => d ? d.toLocaleDateString() : '-';
 const fmtTime = (d) => d ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--';
 
 // 分=00, 秒=0, ミリ秒=0 に丸める
@@ -86,8 +68,8 @@ const formatThousandsInput = (text) => {
 };
 
 // ── 追加: コスト計算用の定数
-const EMPLOYEE_HOURLY = 3000;
-const EXTERNAL_HOURLY  = 3500;
+const EMPLOYEE_HOURLY = 2000;
+const EXTERNAL_HOURLY  = 2800;
 const RENTAL_PER_SQM   = 70000;
 
 // 日付のみ（00:00）に正規化
@@ -151,15 +133,6 @@ export default function ProjectRegisterScreen({ route }) {
   // 新規/既存
   const [projectType, setProjectType] = useState(null);
 
-  // 編集系
-  const [editingIndex, setEditingIndex] = useState(-1);
-  const [editClient, setEditClient] = useState('');
-  const [editStart, setEditStart] = useState(new Date());
-  const [editEnd, setEditEnd] = useState(new Date());
-  const [showEditStart, setShowEditStart] = useState(false);
-  const [showEditEnd, setShowEditEnd] = useState(false);
-  const [showEditStartTimePicker, setShowEditStartTimePicker] = useState(false);
-  const [showEditEndTimePicker, setShowEditEndTimePicker] = useState(false);
 
   // 従業員・担当
   const [employees, setEmployees] = useState([]);
@@ -174,6 +147,13 @@ export default function ProjectRegisterScreen({ route }) {
       prev.includes(empId) ? prev.filter(id => id !== empId) : [...prev, empId]
     );
   }, []);
+  // 役員・部長のみを担当候補にする（従業員は除外）
+  const managerCandidates = useMemo(() => {
+    return (employees || []).filter(e => {
+      const r = String(e?.role || '').toLowerCase();
+      return r === 'executive' || r === 'manager';
+    });
+  }, [employees]);
 
   const leftScrollRef = useRef(null);
   const leftBottomPadding = Platform.OS === 'ios' ? 160 : 160;
@@ -356,70 +336,14 @@ useEffect(() => {
     }
   };
 
-  const handleSaveEdit = async (idx) => {
-    const proj = projects[idx];
-    if (!proj) return;
-    if (!editClient.trim()) return Alert.alert('入力エラー', '顧客名を入力してください');
 
-    setLoading(true);
-    try {
-      await setProject(
-        proj.id,
-        {
-          name: proj.name,
-          clientName: editClient.trim(),
-          startDate: editStart,
-          endDate: editEnd,
-          isMilestoneBilling: proj.isMilestoneBilling,
-        },
-        { by: me?.id ?? null, byName: me?.name ?? null }
-      );
-
-      setEditingIndex(-1);
-      await loadProjects();
-      Alert.alert('成功', 'プロジェクトを更新しました');
-    } catch (e) {
-      console.error(e);
-      Alert.alert('エラー', 'プロジェクトの更新に失敗しました');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDelete = async (idx) => {
-    const proj = projects[idx];
-    if (!proj) return;
-
-    Alert.alert('確認', 'プロジェクトを削除しますか？', [
-      { text: 'キャンセル', style: 'cancel' },
-      {
-        text: '削除',
-        style: 'destructive',
-        onPress: async () => {
-          setLoading(true);
-          try {
-            await deleteProject(proj.id, { by: me?.id ?? null, byName: me?.name ?? null });
-            setEditingIndex(-1);
-            await loadProjects();
-            Alert.alert('削除完了', 'プロジェクトを削除しました');
-          } catch (e) {
-            console.error(e);
-            Alert.alert('エラー', '削除に失敗しました');
-          } finally {
-            setLoading(false);
-          }
-        },
-      },
-    ]);
-  };
-
-  // --- UI ---
+  // --- UI（右カラム廃止 → 単一カラム） ---
   return (
-    <View style={tw`flex-row`}>
-      {/* 左カラム：新規追加フォーム (60%) */}
+    <View style={tw`flex-1`}>
+      {/* 単一カラム：新規/編集フォーム */}
       <ScrollView
         ref={leftScrollRef}
-        style={{ width: width * 0.6, padding: 12 }}
+        style={tw`w-full p-3`}
         contentContainerStyle={{ paddingBottom: leftBottomPadding }}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
@@ -499,12 +423,12 @@ useEffect(() => {
           style={tw`border p-2 mb-2 rounded`}
         />
 
-        {/* 各担当（先頭にプレースホルダー） */}
+        {/* 各担当（役員・部長のみ） */}
         <Text>営業担当</Text>
         <View style={tw`border rounded mb-2 overflow-hidden`}>
           <Picker selectedValue={sales} onValueChange={setSales}>
             <Picker.Item label="選択してください" value={PH} color="#9ca3af" />
-            {employees.map(emp => (
+            {managerCandidates.map(emp => (
               <Picker.Item key={emp.id} label={emp.name} value={emp.id} />
             ))}
           </Picker>
@@ -514,7 +438,7 @@ useEffect(() => {
         <View style={tw`border rounded mb-2 overflow-hidden`}>
           <Picker selectedValue={survey} onValueChange={setSurvey}>
             <Picker.Item label="選択してください" value={PH} color="#9ca3af" />
-            {employees.map(emp => (
+            {managerCandidates.map(emp => (
               <Picker.Item key={emp.id} label={emp.name} value={emp.id} />
             ))}
           </Picker>
@@ -524,7 +448,7 @@ useEffect(() => {
         <View style={tw`border rounded mb-2 overflow-hidden`}>
           <Picker selectedValue={design} onValueChange={setDesign}>
             <Picker.Item label="選択してください" value={PH} color="#9ca3af" />
-            {employees.map(emp => (
+            {managerCandidates.map(emp => (
               <Picker.Item key={emp.id} label={emp.name} value={emp.id} />
             ))}
           </Picker>
@@ -534,7 +458,7 @@ useEffect(() => {
         <View style={tw`border rounded mb-2 overflow-hidden`}>
           <Picker selectedValue={management} onValueChange={setManagement}>
             <Picker.Item label="選択してください" value={PH} color="#9ca3af" />
-            {employees.map(emp => (
+            {managerCandidates.map(emp => (
               <Picker.Item key={emp.id} label={emp.name} value={emp.id} />
             ))}
           </Picker>
@@ -662,149 +586,6 @@ useEffect(() => {
           onPress={handleSubmit}
           disabled={loading}
         />
-      </ScrollView>
-
-      {/* 右カラム：プロジェクト一覧 */}
-      <ScrollView style={{ width: width * 0.4, padding: 12 }}>
-        <Text style={tw`text-lg font-bold mb-2`}>登録プロジェクト一覧</Text>
-        {projects.length === 0 ? (
-          <Text>プロジェクトがありません</Text>
-        ) : (
-          projects.map((proj, idx) => {
-            const sDate = toSafeDate(proj.startDate);
-            const eDate = toSafeDate(proj.endDate);
-            const isEditing = (editingIndex === idx);
-
-            return (
-              <View key={proj.id} style={tw`border rounded p-2 mb-3`}>
-                <TouchableOpacity
-                  onPress={() => {
-                    setEditingIndex(idx);
-                    setEditClient(proj.clientName ?? '');
-                    setEditStart(sDate ?? new Date());
-                    setEditEnd(eDate ?? (sDate ?? new Date()));
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={tw`font-bold`}>{proj.name}</Text>
-                  <Text>顧客: {proj.clientName}</Text>
-                  <Text>開始: {fmtDate(sDate)}</Text>
-                  <Text>終了: {fmtDate(eDate)}</Text>
-                  <Text>区分: {proj.projectType === 'new' ? '新規'
-                    : proj.projectType === 'existing' ? '既存' : '-'}</Text>
-                  <Text>受注金額: {proj.orderAmount ?? '-'} 円</Text>
-                  <Text>交通費: {proj.travelCost ?? '-'} 円</Text>
-                  <Text>諸経費: {proj.miscExpense ?? '-'} 円</Text>
-                  <Text>平米: {proj.areaSqm ?? '-'} m^2</Text>
-                </TouchableOpacity>
-
-                {isEditing && (
-                  <View style={tw`mt-2`}>
-                    <Text>顧客名</Text>
-                    <TextInput
-                      value={editClient}
-                      onChangeText={setEditClient}
-                      style={tw`border p-2 mb-2 rounded`}
-                    />
-
-                    <Text>開始予定日</Text>
-                    <TouchableOpacity
-                      onPress={() => setShowEditStart(true)}
-                      activeOpacity={0.7}
-                      style={tw`border p-2 mb-2 rounded`}
-                    >
-                      <Text>{editStart.toLocaleDateString()}</Text>
-                    </TouchableOpacity>
-                    {showEditStart && (
-                      <DateTimePicker
-                        mode="date"
-                        display={Platform.OS === 'ios' ? 'spinner' : 'calendar'}
-                        value={editStart}
-                        onChange={(_e, d) => {
-                          setShowEditStart(false);
-                          if (d) setEditStart(d);
-                        }}
-                      />
-                    )}
-
-                    <Text>開始予定時刻</Text>
-                    <TouchableOpacity
-                      onPress={() => setShowEditStartTimePicker(true)}
-                      style={tw`border p-2 mb-2 rounded`}
-                      activeOpacity={0.7}
-                    >
-                      <Text>{fmtTime(editStart)}</Text>
-                    </TouchableOpacity>
-                    {showEditStartTimePicker && (
-                      <DateTimePicker
-                        {...timePickerProps}
-                        value={editStart}
-                        onChange={(e, t) => {
-                          setShowEditStartTimePicker(false);
-                          if (t) {
-                            const d = new Date(editStart);
-                            d.setHours(t.getHours(), t.getMinutes(), 0, 0);
-                            setEditStart(d);
-                          }
-                        }}
-                      />
-                    )}
-
-                    <Text>終了予定日</Text>
-                    <TouchableOpacity
-                      onPress={() => setShowEditEnd(true)}
-                      activeOpacity={0.7}
-                      style={tw`border p-2 mb-2 rounded`}
-                    >
-                      <Text>{editEnd.toLocaleDateString()}</Text>
-                    </TouchableOpacity>
-                    {showEditEnd && (
-                      <DateTimePicker
-                        mode="date"
-                        display={Platform.OS === 'ios' ? 'spinner' : 'calendar'}
-                        value={editEnd}
-                        onChange={(_e, d) => {
-                          setShowEditEnd(false);
-                          if (d) setEditEnd(d);
-                        }}
-                      />
-                    )}
-
-                    <Text>終了予定時刻</Text>
-                    <TouchableOpacity
-                      onPress={() => setShowEditEndTimePicker(true)}
-                      style={tw`border p-2 mb-2 rounded`}
-                      activeOpacity={0.7}
-                    >
-                      <Text>{fmtTime(editEnd)}</Text>
-                    </TouchableOpacity>
-                    {showEditEndTimePicker && (
-                      <DateTimePicker
-                        {...timePickerProps}
-                        value={editEnd}
-                        onChange={(e, t) => {
-                          setShowEditEndTimePicker(false);
-                          if (t) {
-                            const d = new Date(editEnd);
-                            d.setHours(t.getHours(), t.getMinutes(), 0, 0);
-                            setEditEnd(d);
-                          }
-                        }}
-                      />
-                    )}
-
-                    <View style={tw`flex-row mt-2`}>
-                      <View style={tw`mr-2`}>
-                        <PrimaryButton title="保存" onPress={() => handleSaveEdit(idx)} />
-                      </View>
-                      <OutlineButton title="削除" onPress={() => handleDelete(idx)} />
-                    </View>
-                  </View>
-                )}
-              </View>
-            );
-          })
-        )}
       </ScrollView>
     </View>
   );
