@@ -12,6 +12,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import tw from 'twrnc';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
@@ -437,14 +438,14 @@ export default function ProjectDetailScreen({ route }) {
 
   if (loading) {
     return (
-      <View style={tw`flex-1 justify-center items-center`}>
+      <SafeAreaView edges={['top']} style={tw`flex-1 justify-center items-center`}>
         <ActivityIndicator size="large" />
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={tw`flex-1`}>
+    <SafeAreaView edges={['top']} style={tw`flex-1`}>
       <ScrollView contentContainerStyle={tw`p-4 pb-28`}>
         <Text style={tw`text-xl font-bold`}>プロジェクト詳細</Text>
         <Text>営業担当: {employees.find(e => e.id === project?.sales)?.name || '—'}</Text>
@@ -601,6 +602,6 @@ export default function ProjectDetailScreen({ route }) {
           </View>
         </View>
       </KeyboardAvoidingView>
-    </View>
+    </SafeAreaView>
   );
 }

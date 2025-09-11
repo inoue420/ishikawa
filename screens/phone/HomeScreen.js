@@ -1,6 +1,7 @@
 // screens/phone/HomeScreen.js
 import React, { useEffect, useState, useContext } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Button } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
 import { DateContext } from '../../DateContext';
@@ -114,9 +115,9 @@ export default function HomeScreen({ navigation, route }) {
 
   if (loading) {
     return (
-      <View style={tw`flex-1 justify-center items-center`}>
+      <SafeAreaView edges={['top']} style={tw`flex-1 justify-center items-center`}>
         <ActivityIndicator size="large" />
-      </View>
+      </SafeAreaView>
     );
   }
 
@@ -128,9 +129,9 @@ export default function HomeScreen({ navigation, route }) {
   };
 
   return (
-    <View style={tw`flex-1 bg-gray-100`}>
+    <SafeAreaView edges={['top']} style={tw`flex-1 bg-gray-100`}>
       {/* 日付選択 */}
-      <View style={tw`flex-row items-center mt-4 p-4 bg-white border-b border-gray-300`}>
+      <View style={tw`flex-row items-center p-4 bg-white border-b border-gray-300`}>
         <TouchableOpacity style={tw`flex-1`} onPress={() => setShowPicker(true)}>
           <Text style={tw`text-lg`}>{dateKey(selectedDate)}</Text>
         </TouchableOpacity>
@@ -213,6 +214,6 @@ export default function HomeScreen({ navigation, route }) {
           />
         </View>
       )}
-    </View>
+    </SafeAreaView>
   );
 }

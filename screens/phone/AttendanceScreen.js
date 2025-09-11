@@ -9,6 +9,7 @@ import {
   TextInput,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
 import { DateContext } from '../../DateContext';
@@ -184,9 +185,9 @@ const Empty = React.memo(function Empty() {
 });
 
 return (
-  <View style={tw`flex-1 bg-gray-100`}>
+  <SafeAreaView edges={['top']} style={tw`flex-1 bg-gray-100`}>
     <View>
-      <View style={tw`flex-row items-center mt-4 p-4 bg-white border-b border-gray-300`}>
+      <View style={tw`flex-row items-center p-4 bg-white border-b border-gray-300`}>
         <TouchableOpacity style={tw`flex-1`} onPress={() => setShowDatePicker(true)}>
           <Text style={tw`text-lg text-center`}>{dateKey(selectedDate)}</Text>
         </TouchableOpacity>
@@ -274,6 +275,6 @@ return (
       )}
       ListEmptyComponent={<Empty />}
     />
-  </View>
+   </SafeAreaView>
 );
 }

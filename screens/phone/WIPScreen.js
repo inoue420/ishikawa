@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   View, Text, TextInput, Button,
   ActivityIndicator, FlatList, TouchableOpacity
@@ -175,7 +176,13 @@ export default function WIPScreen() {
     }
   };
 
-  if (loading) return <ActivityIndicator style={tw`flex-1`} />;
+  if (loading) {
+    return (
+      <SafeAreaView edges={['top']} style={tw`flex-1 justify-center items-center`}>
+        <ActivityIndicator />
+      </SafeAreaView>
+    );
+  }
   const onDeleteBilling = async (projId, billingId) => {
     try {
       await deleteBillingEntry(projId, billingId);
@@ -197,11 +204,12 @@ export default function WIPScreen() {
 
 
   return (
-    <FlatList
-      data={projects}
-      keyExtractor={p => p.id}
-      contentContainerStyle={tw`p-4 bg-gray-100`}
-      renderItem={({ item: p }) => (
+    <SafeAreaView edges={['top']} style={tw`flex-1`}>
+      <FlatList
+        data={projects}
+        keyExtractor={p => p.id}
+        contentContainerStyle={tw`p-4 bg-gray-100`}
+        renderItem={({ item: p }) => (
         <View style={tw`mb-4 bg-white p-4 rounded-lg shadow`}>
           <Text style={tw`text-lg font-bold mb-1`}>{p.name}</Text>
           <Text>顧客: {p.clientName}</Text>
@@ -277,7 +285,8 @@ export default function WIPScreen() {
             </>
           )}
         </View>
-      )}
-    />
+        )}
+      />
+    </SafeAreaView>
   );
 }

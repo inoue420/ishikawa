@@ -1,6 +1,7 @@
 // screens/phone/ScheduleScreen.js
 import React, { useEffect, useMemo, useState, useContext, useCallback, useRef } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Dimensions } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import tw from 'twrnc';
 import { CalendarList, LocaleConfig } from 'react-native-calendars';
 import { DateContext } from '../../DateContext';
@@ -206,9 +207,9 @@ export default function ScheduleScreen({ navigation }) {
 
   if (loading) {
     return (
-      <View style={tw`flex-1 items-center justify-center`}>
-        <ActivityIndicator />
-      </View>
+      <SafeAreaView edges={['top']} style={tw`flex-1 justify-center items-center`}>
+        <ActivityIndicator size="large" />
+      </SafeAreaView>
     );
   }
 
@@ -294,7 +295,7 @@ export default function ScheduleScreen({ navigation }) {
   };
 
   return (
-    <View style={tw`flex-1 bg-gray-50`}>
+    <SafeAreaView edges={['top']} style={tw`flex-1 bg-white`}>
       <CalendarList
         style={{ height: CAL_HEIGHT }}
         calendarHeight={CAL_HEIGHT}      
@@ -321,6 +322,6 @@ export default function ScheduleScreen({ navigation }) {
         showScrollIndicator={false}
         hideExtraDays={false}
       />
-    </View>
+    </SafeAreaView>
   );
 }
