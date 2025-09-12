@@ -8,6 +8,7 @@ import UserRegisterScreen     from './UserRegisterScreen';
 import MaterialRegisterScreen from './MaterialRegisterScreen';
 import ProjectRegisterScreen  from './ProjectRegisterScreen';
 import ExportSettingsScreen   from './ExportSettingsScreen'; 
+import VehicleRegisterScreen from './VehicleRegisterScreen';
 
 const ProfileStack = createStackNavigator();
 
@@ -37,6 +38,12 @@ export default function ProfileStackScreen({ route }) {
         name="ProjectRegister"
         component={ProjectRegisterScreen}
         options={{ title: 'プロジェクト登録' }}
+        initialParams={{ userEmail }}
+      />
+            <ProfileStack.Screen
+        name="VehicleRegister"
+        component={VehicleRegisterScreen}
+        options={{ title: '車両登録' }}
         initialParams={{ userEmail }}
       />
       <ProfileStack.Screen

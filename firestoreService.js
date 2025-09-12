@@ -13,7 +13,8 @@ import {
   where,
   orderBy,  
   Timestamp,
-  serverTimestamp,        
+  serverTimestamp,
+  writeBatch,        
 } from 'firebase/firestore';
 import { ref as sRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage } from './firebaseConfig';
@@ -1159,4 +1160,76 @@ export async function __testUploadPlainText(projectId, date) {
     console.log('[__testUploadPlainText] ERROR', full);
     return { ok: false, error: e?.message || String(e) };
   }
+}
+
+// ========= Vehicle master =========
+export async function fetchVehicles() {
+  const snap = await getDocs(query(collection(db, 'vehicles'), orderBy('name', 'asc')));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function setVehicle(id, payload) {
+  if (id) {
+    await setDoc(doc(db, 'vehicles', id), { ...payload, updatedAt: serverTimestamp() }, { merge: true });
+    return id;
+  } else {
+    const ref = await addDoc(collection(db, 'vehicles'), { ...payload, createdAt: serverTimestamp() });
+    return ref.id;
+  }
+}
+
+export async function deleteVehicle(id) {
+  await deleteDoc(doc(db, 'vehicles', id));
+}
+
+// ========= Vehicle blocks (inspection/repair) =========
+// { vehicleId, startDate:Timestamp, endDate:Timestamp, type:'inspection'|'repair', note }
+export async function addVehicleBlock(block) {
+  return addDoc(collection(db, 'vehicleBlocks'), {
+    ...block,
+    createdAt: serverTimestamp(),
+  });
+}
+
+// 指定期間と重なるブロックを取得（必要に応じてコンソールのインデックス作成リンクに従ってください）
+export async function fetchVehicleBlocksOverlapping(startTs, endTs) {
+  const col = collection(db, 'vehicleBlocks');
+  // startDate <= 範囲End AND endDate >= 範囲Start
+  const qy = query(col, where('startDate', '<=', endTs), where('endDate', '>=', startTs));
+  const snap = await getDocs(qy);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+// ========= Vehicle reservations (per-day) =========
+// doc: { date:Timestamp(00:00), vehicleId, projectId }
+export async function setVehicleReservation(projectId, dateMidnight, vehicleId) {
+  return addDoc(collection(db, 'vehicleReservations'), {
+    projectId,
+    vehicleId,
+    date: Timestamp.fromDate(dateMidnight),
+    createdAt: serverTimestamp(),
+  });
+}
+
+export async function clearReservationsForProject(projectId) {
+  const col = collection(db, 'vehicleReservations');
+  const qy = query(col, where('projectId', '==', projectId));
+  const snap = await getDocs(qy);
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+export async function fetchReservationsInRange(startTs, endTs) {
+  const col = collection(db, 'vehicleReservations');
+  const qy = query(col, where('date', '>=', startTs), where('date', '<=', endTs));
+  const snap = await getDocs(qy);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function fetchReservationsForProject(projectId) {
+  const col = collection(db, 'vehicleReservations');
+  const qy = query(col, where('projectId', '==', projectId));
+  const snap = await getDocs(qy);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
