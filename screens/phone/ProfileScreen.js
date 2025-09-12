@@ -12,6 +12,8 @@ import {
   StyleSheet,
 } from 'react-native';
 import tw from 'twrnc';
+import { signOut } from 'firebase/auth';
+import { auth } from '../../firebaseConfig';
 
 // Firestore service 関数をインポート
 import {
@@ -68,8 +70,15 @@ export default function ProfileScreen({ navigation }) {
     }
   };
 
-  const handleLogout = () => {
-    navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      // ここで画面遷移はしない：onAuthStateChanged(App.js) が自動で
+      // 認証なしルート（SignIn など）を表示します
+    } catch (e) {
+      console.warn('signOut error:', e);
+      Alert.alert('ログアウトに失敗しました', e?.message ?? String(e));
+    }
   };
 
   return (
