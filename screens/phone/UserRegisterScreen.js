@@ -60,6 +60,7 @@ export default function UserRegisterScreen() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [editingEmail, setEditingEmail] = useState(null);
+  const [editingDocId, setEditingDocId] = useState(null); // ★ 追加：実ドキュメントID
 
   const loadUsers = async () => {
     try {
@@ -132,7 +133,7 @@ export default function UserRegisterScreen() {
     try {
       if (editingEmail) {
         // 編集時は既存 loginId を維持（参照崩れ防止）
-        await updateUser(editingEmail, {
+        await updateUser(editingDocId || editingEmail, { // ★ 実ID優先で解決
           loginId: (login || '').toLowerCase(),
           name, affiliation, division, role,
           department: dept, // ★ 保存
@@ -176,6 +177,7 @@ export default function UserRegisterScreen() {
   };
 
   const startEdit = (u) => {
+    setEditingDocId(u.id ?? null);      // ★ 実ID保持
     setEditingEmail(u.email);
     setEmail(u.email);
     setLoginId(u.loginId ?? ''); // ★ 内部保持のみ
@@ -306,6 +308,7 @@ export default function UserRegisterScreen() {
         <View style={styles.cancelButton}>
           <Button title="キャンセル" onPress={() => {
             setEditingEmail(null);
+            setEditingDocId(null);      // ★ クリア
             setEmail(''); setLoginId(''); setName(''); setAffiliation(''); setDivision('');
             setRole('employee'); setDepartment(''); setManagerLoginId('');
           }} />

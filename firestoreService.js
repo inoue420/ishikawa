@@ -700,8 +700,11 @@ export async function registerUser(data) {
  */
 export async function fetchUserByEmail(email) {
   const lower = email.trim().toLowerCase();
-  const snap = await getDoc(doc(employeesCol, lower));
-  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+  const q1 = query(employeesCol, where('email', '==', lower));
+  const snap = await getDocs(q1);
+  if (snap.empty) return null;
+  const d = snap.docs[0];
+  return { id: d.id, ...d.data() };
 }
 
 // email でも loginId でも探せる従業員検索（移行期の両対応用）
@@ -753,9 +756,26 @@ export async function fetchAllUsers() {
  * @param {string} email
  * @param {{ name?: string, affiliation?: string, division?: string }} data
  */
-export async function updateUser(email, data) {
-  const lower = email.trim().toLowerCase();
-  const ref = doc(employeesCol, lower);
+export async function updateUser(target, data) {
+  const key = target.trim().toLowerCase();
+  let ref = null;
+  // 1) email フィールド一致
+  const byEmail = await getDocs(query(employeesCol, where('email', '==', key)));
+  if (!byEmail.empty) {
+    ref = byEmail.docs[0].ref;
+  } else {
+    // 2) ドキュメントID一致
+    const directRef = doc(employeesCol, key);
+    const directSnap = await getDoc(directRef);
+    if (directSnap.exists()) {
+      ref = directRef;
+    } else {
+      // 3) loginId フィールド一致（旧データ用）
+      const byLogin = await getDocs(query(employeesCol, where('loginId', '==', key)));
+      if (!byLogin.empty) ref = byLogin.docs[0].ref;
+    }
+  }
+  if (!ref) throw new Error(`No user document found for key=${key}`);
   return updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
 }
 
@@ -763,10 +783,19 @@ export async function updateUser(email, data) {
  * 従業員を削除
  * @param {string} email
  */
-export async function deleteUser(email) {
-  const lower = email.trim().toLowerCase();
-  const ref = doc(employeesCol, lower);
-  return deleteDoc(ref);
+export async function deleteUser(target) {
+  const key = target.trim().toLowerCase();
+  // 1) email フィールド一致
+  const byEmail = await getDocs(query(employeesCol, where('email', '==', key)));
+  if (!byEmail.empty) return deleteDoc(byEmail.docs[0].ref);
+  // 2) ドキュメントID一致
+  const directRef = doc(employeesCol, key);
+  const directSnap = await getDoc(directRef);
+  if (directSnap.exists()) return deleteDoc(directRef);
+  // 3) loginId フィールド一致
+  const byLogin = await getDocs(query(employeesCol, where('loginId', '==', key)));
+  if (!byLogin.empty) return deleteDoc(byLogin.docs[0].ref);
+  throw new Error(`No user document found for key=${key}`);
 }
 
 /**
