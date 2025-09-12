@@ -8,15 +8,19 @@ import {
   getAuth,
 } from "firebase/auth";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+// Expo Constants から extra を取得
+import Constants from "expo-constants";
+
+const extra = Constants.expoConfig?.extra ?? {};
 
 const firebaseConfig = {
-  apiKey: "AIzaSyDn61Whz74PRXbCKMY2r1FqHmoMfZz8idA",
-  authDomain: "ishikawa-73dd6.firebaseapp.com",
-  projectId: "ishikawa-73dd6",
-  storageBucket: "ishikawa-73dd6.firebasestorage.app",
-  messagingSenderId: "605825857189",
-  appId: "1:605825857189:web:4961007a489ca0ffc6ff4c",
-  measurementId: "G-DL7V0BNQM9",
+  apiKey: extra.firebaseApiKey,
+  authDomain: extra.authDomain,
+  projectId: extra.projectId,
+  storageBucket: extra.storageBucket,
+  messagingSenderId: extra.messagingSenderId,
+  appId: extra.appId,
+  measurementId: extra.measurementId,
 };
 
 // Hot Reload 対策で単一インスタンス化
