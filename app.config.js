@@ -1,6 +1,9 @@
 // app.config.js
 import 'dotenv/config';
 
+const dotenv = require('dotenv');
+dotenv.config({ path: '.env.local' });
+
 export default ({ config }) => ({
   ...config,            // 既存の app.json の内容を維持
   extra: {

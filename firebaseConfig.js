@@ -11,7 +11,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 // Expo Constants から extra を取得
 import Constants from "expo-constants";
 
-const extra = Constants.expoConfig?.extra ?? {};
+const extra = Constants.expoConfig?.extra ?? 
+Constants?.manifest?.extra ??
+ {};
 
 const firebaseConfig = {
   apiKey: extra.firebaseApiKey,
@@ -22,6 +24,14 @@ const firebaseConfig = {
   appId: extra.appId,
   measurementId: extra.measurementId,
 };
+
+console.log("[firebaseConfig] from extra", {
+  apiKey: (extra.firebaseApiKey || "").slice(0, 6) + "…",
+  storageBucket: firebaseConfig.storageBucket,
+});
+if (!firebaseConfig.apiKey) {
+  console.warn("[firebaseConfig] Missing API key. Check .env / EAS Secrets.");
+}
 
 // Hot Reload 対策で単一インスタンス化
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
@@ -36,6 +46,12 @@ try {
   // 既に初期化済み（Fast Refresh 等）の場合はこちら
   auth = getAuth(app);
 }
+
+console.log("[firebaseConfig] app.options", {
+  projectId: app?.options?.projectId,
+  apiKey: (app?.options?.apiKey || "").slice(0, 6) + "…",
+  storageBucket: app?.options?.storageBucket,
+});
 
 export { app };
 export const db = getFirestore(app);
