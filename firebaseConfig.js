@@ -25,12 +25,14 @@ const firebaseConfig = {
   measurementId: extra.measurementId,
 };
 
-console.log("[firebaseConfig] from extra", {
-  apiKey: (extra.firebaseApiKey || "").slice(0, 6) + "…",
-  storageBucket: firebaseConfig.storageBucket,
-});
-if (!firebaseConfig.apiKey) {
-  console.warn("[firebaseConfig] Missing API key. Check .env / EAS Secrets.");
+if (__DEV__) {
+  console.log("[firebaseConfig] from extra", {
+    apiKey: (extra.firebaseApiKey || "").slice(0, 6) + "…",
+    storageBucket: firebaseConfig.storageBucket,
+  });
+  if (!firebaseConfig.apiKey) {
+    console.warn("[firebaseConfig] Missing API key. Check .env / EAS Secrets.");
+  }
 }
 
 // Hot Reload 対策で単一インスタンス化
@@ -47,11 +49,13 @@ try {
   auth = getAuth(app);
 }
 
-console.log("[firebaseConfig] app.options", {
-  projectId: app?.options?.projectId,
-  apiKey: (app?.options?.apiKey || "").slice(0, 6) + "…",
-  storageBucket: app?.options?.storageBucket,
-});
+if (__DEV__) {
+  console.log("[firebaseConfig] app.options", {
+    projectId: app?.options?.projectId,
+    apiKey: (app?.options?.apiKey || "").slice(0, 6) + "…",
+    storageBucket: app?.options?.storageBucket,
+  });
+}
 
 export { app };
 export const db = getFirestore(app);
