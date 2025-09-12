@@ -8,7 +8,8 @@ import TabletNavigator from './navigation/TabletNavigator';
 import PhoneNavigator from './navigation/PhoneNavigator';
 import SignInScreen from './screens/phone/SignInScreen';
 import { createStackNavigator } from '@react-navigation/stack';
-import { getAuth, onAuthStateChanged, signInAnonymously } from 'firebase/auth';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from './firebaseConfig';
 
 const RootStack = createStackNavigator();
 
@@ -25,26 +26,25 @@ export default function App() {
   const [userEmail, setUserEmail]   = useState(null);
 
   useEffect(() => {
-    const auth = getAuth();
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        console.log('[auth] signed in', {
-          uid: user.uid,
-          isAnonymous: user.isAnonymous,
-          email: user.email ?? null,
-        });
+        // 旧匿名セッションが残っていたら即サインアウトしてログイン画面へ
+        if (user.isAnonymous) {
+          try { await signOut(auth); } catch {}
+          setSignedIn(false);
+          setUserEmail(null);
+          setAuthReady(true);
+          return;
+        }
+        console.log('[auth] signed in', { uid: user.uid, isAnonymous: user.isAnonymous, email: user.email ?? null });
         setSignedIn(true);
         setUserEmail(user.email ?? null);
         setAuthReady(true);
       } else {
-        try {
-          await signInAnonymously(auth);
-        } catch (e) {
-          console.log('[auth] anonymous sign-in error', e?.message || e);
-          // 失敗しても画面は出す（SignIn へ）
-          setSignedIn(false);
-          setAuthReady(true);
-        }
+        // 匿名自動サインインは廃止
+        setSignedIn(false);
+        setUserEmail(null);
+        setAuthReady(true);
       }
     });
    return unsub;
