@@ -18,6 +18,15 @@ import {
   findEmployeeByIdOrEmail,
 } from '../../firestoreService';
 import { Picker } from '@react-native-picker/picker';
+import {
+  fetchVehicles,
+  fetchVehicleBlocksOverlapping,
+  fetchReservationsInRange,
+  fetchReservationsForProject,
+  setVehicleReservation,
+  clearReservationsForProject,
+} from '../../firestoreService';
+import { Timestamp } from 'firebase/firestore';
 
 // --- 共通ボタン（Textで包む） ---
 function PrimaryButton({ title, onPress, disabled, danger }) {
@@ -77,6 +86,13 @@ const dateOnly = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 // 包含日数
 const diffDaysInclusive = (start, end) =>
   Math.floor((dateOnly(end) - dateOnly(start)) / 86400000) + 1;
+// YYYY-MM-DD
+const toYmd = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+};
 
 // 稼働時間: 同日=実時間 / 複数日=日数×8h
 const calcWorkHours = (start, end) => {
@@ -182,6 +198,96 @@ export default function ProjectRegisterScreen({ route }) {
       }
     })();
   }, []);
+    // ===== 車両関連 =====
+  const [vehicles, setVehicles] = useState([]);
+  // { 'YYYY-MM-DD': { sales?: vehicleId, cargo?: vehicleId } }
+  const [vehicleSelections, setVehicleSelections] = useState({});
+  // { 'YYYY-MM-DD': Set(vehicleId) }
+  const [unavailableMap, setUnavailableMap] = useState({});
+  const vehiclesById = useMemo(
+    () => Object.fromEntries((vehicles || []).map(v => [v.id, v])),
+    [vehicles]
+  );
+
+  useEffect(() => {
+    (async () => {
+      const vs = await fetchVehicles();
+      setVehicles(vs);
+    })();
+  }, []);
+
+  const datesInRange = useMemo(() => {
+    if (!startDate || !endDate) return [];
+    const s0 = dateOnly(startDate), e0 = dateOnly(endDate);
+    const arr = [];
+    for (let d = new Date(s0); d <= e0; d.setDate(d.getDate() + 1)) {
+      arr.push(new Date(d));
+    }
+    return arr;
+  }, [startDate, endDate]);
+
+  // 期間の空き状況（既予約・車検/修理）を算出
+  useEffect(() => {
+    (async () => {
+      if (datesInRange.length === 0) { setUnavailableMap({}); setVehicleSelections({}); return; }
+      const s = datesInRange[0];
+      const e = datesInRange[datesInRange.length - 1];
+      const startTs = Timestamp.fromDate(new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0,0,0,0));
+      const endTs   = Timestamp.fromDate(new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23,59,59,999));
+
+      const blocks = await fetchVehicleBlocksOverlapping(startTs, endTs);
+      const reservations = await fetchReservationsInRange(startTs, endTs);
+
+      const map = {};
+      datesInRange.forEach(d => { map[toYmd(d)] = new Set(); });
+
+      // 使用不可：車検/修理ブロック
+      for (const b of blocks) {
+        const bs = b.startDate.toDate ? b.startDate.toDate() : new Date(b.startDate);
+        const be = b.endDate.toDate ? b.endDate.toDate() : new Date(b.endDate);
+        for (const d of datesInRange) {
+          const dd = dateOnly(d);
+          if (dd >= dateOnly(bs) && dd <= dateOnly(be)) {
+            map[toYmd(d)].add(b.vehicleId);
+          }
+        }
+      }
+      // 使用不可：他プロジェクト予約
+      for (const r of reservations) {
+        const dy = toYmd(r.date.toDate ? r.date.toDate() : new Date(r.date));
+        if (!map[dy]) map[dy] = new Set();
+        map[dy].add(r.vehicleId);
+      }
+      setUnavailableMap(map);
+
+      // 編集時：自プロジェクトの既存予約でプリフィル
+      if (editingProjectId) {
+        const mine = await fetchReservationsForProject(editingProjectId);
+        const next = {};
+        for (const r of mine) {
+          const dy = toYmd(r.date.toDate ? r.date.toDate() : new Date(r.date));
+          const v  = vehiclesById[r.vehicleId];
+          const t  = (v?.vehicleType || 'sales'); // 既存データは営業車扱いにフォールバック
+          next[dy] = { ...(next[dy] || {}), [t]: r.vehicleId };
+        }
+        setVehicleSelections(next);
+      } else {
+        setVehicleSelections({});
+      }
+    })();
+  }, [datesInRange.length, editingProjectId, vehiclesById]);
+
+  const onPickVehicle = (ymd, type, vehicleId) => {
+    const blocked = !!vehicleId && unavailableMap[ymd]?.has(vehicleId);
+    if (blocked) {
+      Alert.alert('選択不可', 'この日は選択した車両を使用できません（既予約／車検・修理）');
+      return;
+    }
+    setVehicleSelections(prev => ({
+      ...prev,
+      [ymd]: { ...(prev[ymd] || {}), [type]: vehicleId || undefined }
+    }));
+  };
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -295,6 +401,15 @@ useEffect(() => {
       workLogs: [],
     };
 
+    // （任意）未選択の注意喚起（ここではログのみ）
+    const missing = datesInRange.filter(d => {
+      const sel = vehicleSelections[toYmd(d)] || {};
+      return !sel.sales && !sel.cargo;
+    }).length;
+    if (datesInRange.length > 0 && missing > 0) {
+      // 必須にしたい場合は Alert 後 return してください
+      console.log('[PRS] vehicle not selected for', missing, 'days');
+    }    
     setLoading(true);
     try {
       const actor = {
@@ -304,12 +419,40 @@ useEffect(() => {
       if (editingProjectId) {
         // ← 編集：上書き更新
         await setProject(editingProjectId, payload, actor);
+        await clearReservationsForProject(editingProjectId);
+        for (const d of datesInRange) {
+          const ymd = toYmd(d);
+          const sel = vehicleSelections[ymd] || {};
+          for (const t of ['sales','cargo']) {
+            const vid = sel[t];
+            if (!vid) continue;
+            await setVehicleReservation(
+              editingProjectId,
+              new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0),
+              vid
+            );
+          }
+        }
         await loadProjects();
         Alert.alert('成功', 'プロジェクトを更新しました');
         setEditingProjectId(null);
       } else {
         // ← 新規追加
-        await setProject(null, payload, actor);
+        const newProjectId = await setProject(null, payload, actor);
+        // 予約作成
+        for (const d of datesInRange) {
+          const ymd = toYmd(d);
+          const sel = vehicleSelections[ymd] || {};
+          for (const t of ['sales','cargo']) {
+            const vid = sel[t];
+            if (!vid) continue;
+            await setVehicleReservation(
+              newProjectId,
+              new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0),
+              vid
+            );
+          }
+        }
         // クリア
         setName('');
         setClientName('');
@@ -325,6 +468,7 @@ useEffect(() => {
         setSurvey(PH);
         setDesign(PH);
         setManagement(PH);
+        setVehicleSelections({});
         await loadProjects();
         Alert.alert('成功', 'プロジェクトを追加しました');
       }
@@ -576,6 +720,58 @@ useEffect(() => {
             }}
           />
         )}
+
+        {/* ===== 車両選択（開始〜終了の各日：営業車／積載車） ===== */}
+        <Text style={tw`text-lg font-bold mt-4 mb-2`}>車両選択</Text>
+        {datesInRange.length === 0 && <Text>日付範囲を設定してください。</Text>}
+        {datesInRange.map((d) => {
+          const ymd = toYmd(d);
+          const unavailable = unavailableMap[ymd] || new Set();
+          const sel = vehicleSelections[ymd] || {};
+          const salesList = vehicles.filter(v => (v?.vehicleType || 'sales') === 'sales');
+          const cargoList = vehicles.filter(v => (v?.vehicleType || 'sales') === 'cargo');
+          const RenderGroup = ({ title, type, list }) => (
+            <View style={tw`mb-3`}>
+              <Text style={tw`mb-1`}>{title}</Text>
+              {list.length === 0 ? (
+                <Text style={tw`text-gray-500`}>該当車両なし</Text>
+              ) : (
+                <View style={tw`flex-row flex-wrap -mx-1`}>
+                  {list.map(v => {
+                    const isBlocked = unavailable.has(v.id);
+                    const isSelected = sel[type] === v.id;
+                    return (
+                      <TouchableOpacity
+                        key={v.id}
+                        disabled={isBlocked}
+                        onPress={() => onPickVehicle(ymd, type, isSelected ? undefined : v.id)}
+                        activeOpacity={0.7}
+                        style={tw.style(
+                          'm-1 px-3 py-2 rounded border',
+                          isBlocked
+                            ? 'bg-gray-200 border-gray-300 opacity-50'
+                            : (isSelected
+                                ? 'bg-blue-100 border-blue-400'
+                                : 'bg-white border-gray-300'
+                              )
+                        )}
+                      >
+                        <Text>{isSelected ? '☑ ' : '☐ '}{v.name}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+          );
+          return (
+            <View key={ymd} style={tw`mb-4 p-2 border rounded`}>
+              <Text style={tw`font-bold mb-2`}>{d.toLocaleDateString()}</Text>
+              <RenderGroup title="営業車枠" type="sales" list={salesList} />
+              <RenderGroup title="積載車枠" type="cargo" list={cargoList} />
+            </View>
+          );
+        })}
 
         <PrimaryButton
           title={

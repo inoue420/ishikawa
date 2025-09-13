@@ -432,7 +432,7 @@ export async function setProject(projectId, projectData, actor) {
       projectName: projectData?.name ?? null,
     });
   } catch (_) { /* ログ失敗は致命傷にしない */ }
-  return;
+  return docRef.id;
 }
 export async function fetchProjectsOverlappingRange(start, end) {
   const startTs = Timestamp.fromDate(start);
