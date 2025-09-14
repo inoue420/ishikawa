@@ -20,7 +20,7 @@ import { ref as sRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase
 import { db, storage } from './firebaseConfig';
 import { getAuth } from 'firebase/auth';
 import * as FileSystem from 'expo-file-system';
-import { initializeApp, getApp } from 'firebase/app';
+import { getApp } from 'firebase/app';
  
 
 // Base64 -> Uint8Array（atob/Buffer 非依存で動く純JSデコーダ）
@@ -412,10 +412,13 @@ export async function setProject(projectId, projectData, actor) {
   const toTS = (v) => (v instanceof Date ? Timestamp.fromDate(v) : v ?? null);
  // 追加: 呼び出し側 or Auth から actor を確定
   const actorResolved = await _resolveActorIfNeeded(actor);
+  // ❗未指定(startDate/endDateがundefined)なら一切上書きしない
+  const base = { ...projectData };
+  if ('startDate' in projectData) base.startDate = toTS(projectData.startDate);
+  if ('endDate'   in projectData) base.endDate   = toTS(projectData.endDate);
+
   const dataToSave = {
-    ...projectData,
-    startDate: toTS(projectData.startDate),
-    endDate:   toTS(projectData.endDate),
+    ...base,
     updatedAt: serverTimestamp(),
     updatedBy: actorResolved?.by ?? null,
     updatedByName: actorResolved?.byName ?? null,

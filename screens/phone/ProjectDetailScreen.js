@@ -34,6 +34,15 @@ import {
   setProject as upsertProject,
   deleteProject,  
 } from '../../firestoreService';
+import {
+  fetchVehicles,
+  fetchVehicleBlocksOverlapping,
+  fetchReservationsInRange,
+  fetchReservationsForProject,
+  setVehicleReservation,
+  clearReservationsForProject,
+} from '../../firestoreService';
+import { Timestamp } from 'firebase/firestore';
 
 // 追加：Firestore Timestamp/Date を安全に Date|null へ
 const toDateMaybe = (v) => {
@@ -43,6 +52,14 @@ const toDateMaybe = (v) => {
   } catch {
     return null;
   }
+};
+// 日付ヘルパー
+const dateOnly = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const toYmd = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
 };
 
 export default function ProjectDetailScreen({ route }) {
@@ -61,7 +78,8 @@ export default function ProjectDetailScreen({ route }) {
         const emp = await findEmployeeByIdOrEmail(String(userEmail));
         if (emp) return { by: emp.id, byName: emp.name ?? null, source: 'route.userEmail' };
       }
-      // 3) 従業員一覧が未取得なら取得してフォールバック      let emps = employees;
+      // 3) 従業員一覧が未取得なら取得してフォールバック      
+      let emps = employees;
       if (!emps || emps.length === 0) {
         emps = await fetchAllUsers();
         setEmployees(emps);
@@ -93,7 +111,26 @@ export default function ProjectDetailScreen({ route }) {
   const [commentText, setCommentText] = useState('');
   const [pendingImage, setPendingImage] = useState(null); // { uri }
   const [sending, setSending] = useState(false);
+  // 車両まわり
+  const [vehicles, setVehicles] = useState([]);
+  const vehiclesById = useMemo(
+    () => Object.fromEntries((vehicles || []).map(v => [v.id, v])),
+    [vehicles]
+  );
+  // 選択と空き状況
+  const [vehicleSelections, setVehicleSelections] = useState({}); // { 'YYYY-MM-DD': { sales?: id, cargo?: id } }
+  const [unavailableMap, setUnavailableMap] = useState({});       // { 'YYYY-MM-DD': Set(vehicleId) }
 
+  // プロジェクトの開始/終了（Date）→ 期間配列
+  const projStart = useMemo(() => toDateMaybe(project?.startDate), [project?.startDate]);
+  const projEnd   = useMemo(() => toDateMaybe(project?.endDate) || toDateMaybe(project?.startDate), [project?.endDate, project?.startDate]);
+  const datesInRange = useMemo(() => {
+    if (!projStart || !projEnd) return [];
+    const s0 = dateOnly(projStart), e0 = dateOnly(projEnd);
+    const arr = [];
+    for (let d = new Date(s0); d <= e0; d.setDate(d.getDate() + 1)) arr.push(new Date(d));
+    return arr;
+  }, [projStart, projEnd]);
 
   // id→name の辞書と、参加者名リスト
   const nameById = useMemo(
@@ -183,6 +220,78 @@ export default function ProjectDetailScreen({ route }) {
       }
     })();
   }, [projectId, date]);
+  // 車両マスタ
+  useEffect(() => {
+    (async () => {
+      try {
+        const vs = await fetchVehicles();
+        setVehicles(vs);
+      } catch (e) {
+        console.log('[vehicles] load error', e);
+      }
+    })();
+  }, []);  
+  // 期間の空き状況（他プロジェクト予約 / 車検・修理）と選択のプリフィル
+ useEffect(() => {
+   if (project?.vehiclePlan && Object.keys(project.vehiclePlan).length) {
+     setVehicleSelections(project.vehiclePlan);
+   }
+ }, [project?.vehiclePlan]);
+
+  useEffect(() => {
+    (async () => {
+      if (datesInRange.length === 0) {
+        setUnavailableMap({});
+        setVehicleSelections(project?.vehiclePlan || {});
+        return;
+      }
+      const s = datesInRange[0];
+      const e = datesInRange[datesInRange.length - 1];
+      const startTs = Timestamp.fromDate(new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0,0,0,0));
+      const endTs   = Timestamp.fromDate(new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23,59,59,999));
+
+      const [blocks, reservations] = await Promise.all([
+        fetchVehicleBlocksOverlapping(startTs, endTs),
+        fetchReservationsInRange(startTs, endTs),
+      ]);
+
+      const map = {};
+      datesInRange.forEach(d => { map[toYmd(d)] = new Set(); });
+
+      // 使用不可：車検/修理ブロック
+      for (const b of blocks) {
+        const bs = b.startDate?.toDate?.() ?? new Date(b.startDate);
+        const be = b.endDate?.toDate?.() ?? new Date(b.endDate);
+        for (const d of datesInRange) {
+          const dd = dateOnly(d);
+          if (dd >= dateOnly(bs) && dd <= dateOnly(be)) map[toYmd(d)].add(b.vehicleId);
+        }
+      }
+      // 使用不可：他プロジェクトの予約（自プロジェクトの予約は除外して編集できるようにする）
+      for (const r of reservations) {
+        if (r.projectId === projectId) continue;
+        const dy = toYmd(r.date?.toDate?.() ?? new Date(r.date));
+        if (!map[dy]) map[dy] = new Set();
+        map[dy].add(r.vehicleId);
+      }
+      setUnavailableMap(map);
+
+      // プリフィル：プロジェクト保存済みの vehiclePlan を最優先、なければ既存予約から推定
+      if (project?.vehiclePlan && Object.keys(project.vehiclePlan).length) {
+        setVehicleSelections(project.vehiclePlan);
+      } else {
+        const mine = await fetchReservationsForProject(projectId);
+        const next = {};
+        for (const r of mine) {
+          const dy = toYmd(r.date?.toDate?.() ?? new Date(r.date));
+          const v  = vehiclesById[r.vehicleId];
+          const t  = (v?.vehicleType || 'sales');
+          next[dy] = { ...(next[dy] || {}), [t]: r.vehicleId };
+        }
+        setVehicleSelections(next);
+      }
+    })();
+   }, [projStart?.getTime(), projEnd?.getTime(), projectId, project?.vehiclePlan, vehiclesById]);
 
   // 画像を選ぶ（送信時にまとめて投稿）
   const handlePickImage = async () => {
@@ -248,15 +357,7 @@ export default function ProjectDetailScreen({ route }) {
         });
         console.log('[handleSend] upload done', { photoId, url: String(url).slice(0, 80) });
         uploadedUrl = url;
-        await addEditLog({
-          projectId,
-          date,
-          action: 'add',
-          target: 'photo',
-          targetId: photoId,
-          by,
-          byName
-        });
+
       }
 
       // コメント追加（画像URLも格納可）
@@ -289,6 +390,54 @@ export default function ProjectDetailScreen({ route }) {
       setSending(false);
     }
   };
+  const onPickVehicle = (ymd, type, vehicleId) => {
+    const blocked = !!vehicleId && unavailableMap[ymd]?.has(vehicleId);
+    if (blocked) {
+      Alert.alert('選択不可', 'この日は選択した車両を使用できません（既予約／車検・修理）');
+      return;
+    }
+    setVehicleSelections(prev => ({
+      ...prev,
+      [ymd]: { ...(prev[ymd] || {}), [type]: vehicleId || undefined }
+    }));
+  };
+
+  const handleSaveVehicles = async () => {
+    try {
+      const { by, byName } = await resolveCurrentUser();
+      // project.vehiclePlan と予約を同期
+      const vehiclePlan = {};
+      Object.entries(vehicleSelections || {}).forEach(([ymd, sel]) => {
+        const salesId = sel?.sales || null;
+        const cargoId = sel?.cargo || null;
+        if (salesId || cargoId) vehiclePlan[ymd] = { sales: salesId, cargo: cargoId };
+      });
+      // ドキュメントに保存
+      await upsertProject(projectId, { vehiclePlan }, { by, byName });
+      // 予約を再作成（当該プロジェクト分を全クリア→再登録）
+      await clearReservationsForProject(projectId);
+      for (const d of datesInRange) {
+        const ymd = toYmd(d);
+        const sel = vehiclePlan[ymd] || {};
+        for (const t of ['sales','cargo']) {
+          const vid = sel[t];
+          if (!vid) continue;
+          await setVehicleReservation(
+            projectId,
+            new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0),
+            vid
+          );
+        }
+      }
+      Alert.alert('保存しました', '車両割当てを更新しました。');
+      // ローカル state も同期
+      setProject(p => ({ ...(p || {}), vehiclePlan }));
+    } catch (e) {
+      console.error('[save vehicles] error', e);
+      Alert.alert('保存に失敗しました');
+    }
+  };
+
 
   // 追加：右上メニュー（編集・コピー・削除）
   const openActionMenu = useCallback(() => {
@@ -413,14 +562,7 @@ export default function ProjectDetailScreen({ route }) {
           try {
             const { by, byName } = await resolveCurrentUser();
             await deleteProjectPhoto({ projectId, photoId: photo.id });
-            await addEditLog({
-              projectId,
-              date,
-              action: 'delete',
-              target: 'photo',
-              targetId: photo.id,
-              by, byName,
-            });
+
             const [ph, logs] = await Promise.all([
               listProjectPhotos(projectId, date),
               fetchEditLogs(projectId, date),
@@ -456,6 +598,68 @@ export default function ProjectDetailScreen({ route }) {
           参加従業員（{participantNames.length}名）:
           {participantNames.length ? ` ${participantNames.join('、')}` : ' —'}
         </Text>
+
+        {/* ===== 車両（参加従業員の下） ===== */}
+        <View style={tw`mt-5`}>
+          <Text style={tw`text-lg font-bold`}>車両</Text>
+          {datesInRange.length === 0 ? (
+            <Text style={tw`mt-2`}>開始日・終了日の設定が必要です。</Text>
+          ) : (
+            datesInRange.map((d) => {
+              const ymd = toYmd(d);
+              const unavailable = unavailableMap[ymd] || new Set();
+              const sel = vehicleSelections[ymd] || {};
+              const salesList = vehicles.filter(v => (v?.vehicleType || 'sales') === 'sales');
+              const cargoList = vehicles.filter(v => (v?.vehicleType || 'sales') === 'cargo');
+              const RenderGroup = ({ title, type, list }) => (
+                <View style={tw`mb-3`}>
+                  <Text style={tw`mb-1`}>{title}</Text>
+                  {list.length === 0 ? (
+                    <Text style={tw`text-gray-500`}>該当車両なし</Text>
+                  ) : (
+                    <View style={tw`flex-row flex-wrap -mx-1`}>
+                      {list.map(v => {
+                        const isBlocked = unavailable.has(v.id);
+                        const isSelected = sel[type] === v.id;
+                        return (
+                          <TouchableOpacity
+                            key={v.id}
+                            disabled={isBlocked}
+                            onPress={() => onPickVehicle(ymd, type, isSelected ? undefined : v.id)}
+                            activeOpacity={0.7}
+                            style={tw.style(
+                              'm-1 px-3 py-2 rounded border',
+                              isBlocked
+                                ? 'bg-gray-200 border-gray-300 opacity-50'
+                                : (isSelected
+                                    ? 'bg-blue-100 border-blue-400'
+                                    : 'bg-white border-gray-300'
+                                  )
+                            )}
+                          >
+                            <Text>{isSelected ? '☑ ' : '☐ '}<Text>{v.name}</Text></Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+              );
+              return (
+                <View key={ymd} style={tw`mt-3 p-3 border rounded`}>
+                  <Text style={tw`font-bold mb-2`}>{d.toLocaleDateString()}</Text>
+                  <RenderGroup title="営業車枠" type="sales" list={salesList} />
+                  <RenderGroup title="積載車枠" type="cargo" list={cargoList} />
+                </View>
+              );
+            })
+          )}
+          <View style={tw`mt-3`}>
+            <TouchableOpacity onPress={handleSaveVehicles} activeOpacity={0.7} style={tw`bg-blue-600 rounded p-3 items-center`}>
+              <Text style={tw`text-white font-bold`}>車両を保存</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
 
         {/* ===== 写真セクション ===== */}
         <View style={tw`mt-6`}>

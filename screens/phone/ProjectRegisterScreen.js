@@ -254,6 +254,7 @@ export default function ProjectRegisterScreen({ route }) {
       }
       // 使用不可：他プロジェクト予約
       for (const r of reservations) {
+        if (editingProjectId && r.projectId === editingProjectId) continue;
         const dy = toYmd(r.date.toDate ? r.date.toDate() : new Date(r.date));
         if (!map[dy]) map[dy] = new Set();
         map[dy].add(r.vehicleId);
@@ -378,19 +379,16 @@ useEffect(() => {
     const rentalResourceCost = Math.round((toNumberOrNull(areaSqm) || 0) * RENTAL_PER_SQM);
 
     // --- 追加: プロジェクトに保存する車両プランを生成 ---
-    const vehiclePlan = {};
-    for (const d of datesInRange) {
-      const ymd = toYmd(d);
-      const sel = vehicleSelections[ymd] || {};
-      if (sel.sales || sel.cargo) {
-        vehiclePlan[ymd] = {
-          sales: sel.sales || null,
-          cargo: sel.cargo || null,
-        };
-      }
-    }
-    const hasAnySelection = Object.keys(vehiclePlan).length > 0;
 
+   const vehiclePlan = {};
+   for (const d of datesInRange) {
+     const ymd = toYmd(d);
+     const sel = vehicleSelections[ymd] || {};
+     const salesId = sel.sales || null;
+     const cargoId = sel.cargo || null;
+     if (salesId || cargoId) vehiclePlan[ymd] = { sales: salesId, cargo: cargoId };
+   }
+    const hasAnySelection = Object.keys(vehiclePlan).length > 0;    
     const payload = {
       name: name.trim(),
       clientName: clientName.trim(),
@@ -413,7 +411,6 @@ useEffect(() => {
       rentalResourceCost,
       ...(hasAnySelection ? { vehiclePlan } : {}),
 
-      workLogs: [],
     };
 
     // （任意）未選択の注意喚起（ここではログのみ）
