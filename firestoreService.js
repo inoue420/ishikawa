@@ -154,6 +154,12 @@ export async function addUser(userData) {
  *   projectType  : 'new'|'existing'|null // 新規/既存 区分
  *   createdAt    : Timestamp    // 作成時刻（新規時）
  *   updatedAt    : Timestamp    // 最終更新時刻
+ *   vehiclePlan  : {            // 日毎の車両割当（任意）
+ *     [date: string]: {
+ *       sales: string|null,     // 営業車 vehicleId
+ *       cargo: string|null,     // 積載車 vehicleId
+ *     }
+ *   } 
  */
 
 // ===== 写真アップロード/一覧/削除/履歴 =====

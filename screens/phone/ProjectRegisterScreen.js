@@ -377,6 +377,20 @@ useEffect(() => {
     );
     const rentalResourceCost = Math.round((toNumberOrNull(areaSqm) || 0) * RENTAL_PER_SQM);
 
+    // --- 追加: プロジェクトに保存する車両プランを生成 ---
+    const vehiclePlan = {};
+    for (const d of datesInRange) {
+      const ymd = toYmd(d);
+      const sel = vehicleSelections[ymd] || {};
+      if (sel.sales || sel.cargo) {
+        vehiclePlan[ymd] = {
+          sales: sel.sales || null,
+          cargo: sel.cargo || null,
+        };
+      }
+    }
+    const hasAnySelection = Object.keys(vehiclePlan).length > 0;
+
     const payload = {
       name: name.trim(),
       clientName: clientName.trim(),
@@ -397,6 +411,7 @@ useEffect(() => {
 
       laborCost,
       rentalResourceCost,
+      ...(hasAnySelection ? { vehiclePlan } : {}),
 
       workLogs: [],
     };
