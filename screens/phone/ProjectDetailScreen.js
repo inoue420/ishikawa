@@ -33,6 +33,7 @@ import {
   findEmployeeByIdOrEmail,
   setProject as upsertProject,
   deleteProject,  
+  fetchProjectsOverlappingRange,
 } from '../../firestoreService';
 import {
   fetchVehicles,
@@ -254,25 +255,63 @@ export default function ProjectDetailScreen({ route }) {
         fetchVehicleBlocksOverlapping(startTs, endTs),
         fetchReservationsInRange(startTs, endTs),
       ]);
+      const overlappedProjects = await fetchProjectsOverlappingRange(
+        new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0,0,0,0),
+        new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23,59,59,999)
+      );
+      const projMap = Object.fromEntries((overlappedProjects || []).map(p => [p.id, p]));
 
       const map = {};
       datesInRange.forEach(d => { map[toYmd(d)] = new Set(); });
 
-      // 使用不可：車検/修理ブロック
+      // 自案件のその日ごとの時間窓
+      const pS = toDateMaybe(project?.startDate);
+      const pE = toDateMaybe(project?.endDate) || pS;
+      const dayWindow = (d) => {
+        const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0);
+        const dayEnd   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23,59,59,999);
+        const clampStart =
+          (pS <= dayStart && pE >= dayEnd) ? dayStart :
+          (toYmd(pS) === toYmd(d)) ? pS : dayStart;
+        const clampEnd =
+          (pS <= dayStart && pE >= dayEnd) ? dayEnd :
+          (toYmd(pE) === toYmd(d)) ? pE : dayEnd;
+        return [clampStart, clampEnd];
+      };
+      const overlaps = (a1, a2, b1, b2) => a1 < b2 && b1 < a2;
+
+      // 使用不可：車検/修理ブロック（時間帯重複のみ）
       for (const b of blocks) {
         const bs = b.startDate?.toDate?.() ?? new Date(b.startDate);
         const be = b.endDate?.toDate?.() ?? new Date(b.endDate);
         for (const d of datesInRange) {
-          const dd = dateOnly(d);
-          if (dd >= dateOnly(bs) && dd <= dateOnly(be)) map[toYmd(d)].add(b.vehicleId);
+          const [meS, meE] = dayWindow(d);
+          if (overlaps(meS, meE, bs, be)) map[toYmd(d)].add(b.vehicleId);
         }
       }
       // 使用不可：他プロジェクトの予約（自プロジェクトの予約は除外して編集できるようにする）
       for (const r of reservations) {
         if (r.projectId === projectId) continue;
-        const dy = toYmd(r.date?.toDate?.() ?? new Date(r.date));
-        if (!map[dy]) map[dy] = new Set();
-        map[dy].add(r.vehicleId);
+        const other = projMap[r.projectId];
+        if (!other) continue;
+        const oS = other.startDate?.toDate?.() ?? new Date(other.startDate);
+        const oE = (other.endDate?.toDate?.() ?? new Date(other.endDate || other.startDate));
+        const d  = (r.date?.toDate?.() ?? new Date(r.date));
+        const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        const [meS, meE] = dayWindow(day);
+        const oDayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0,0,0,0);
+        const oDayEnd   = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23,59,59,999);
+        const oClampS =
+          (oS <= oDayStart && oE >= oDayEnd) ? oDayStart :
+          (toYmd(oS) === toYmd(day)) ? oS : oDayStart;
+        const oClampE =
+          (oS <= oDayStart && oE >= oDayEnd) ? oDayEnd :
+          (toYmd(oE) === toYmd(day)) ? oE : oDayEnd;
+        if (overlaps(meS, meE, oClampS, oClampE)) {
+          const dy = toYmd(day);
+          if (!map[dy]) map[dy] = new Set();
+          map[dy].add(r.vehicleId);
+        }
       }
       setUnavailableMap(map);
 
@@ -401,10 +440,42 @@ export default function ProjectDetailScreen({ route }) {
       [ymd]: { ...(prev[ymd] || {}), [type]: vehicleId || undefined }
     }));
   };
+  // --- 保存前・競合チェック（日単位） ---
+  const checkVehicleConflicts = useCallback(async (selections, dates, selfProjectId) => {
+    if (!dates?.length) return [];
+    const s = dates[0];
+    const e = dates[dates.length - 1];
+    const startTs = Timestamp.fromDate(new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0,0,0,0));
+    const endTs   = Timestamp.fromDate(new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23,59,59,999));
+    const reservations = await fetchReservationsInRange(startTs, endTs);
+    const conflicts = [];
+    for (const d of dates) {
+      const ymd = toYmd(d);
+      const sel = selections[ymd] || {};
+      for (const t of ['sales','cargo']) {
+        const vid = sel[t];
+        if (!vid) continue;
+        const hit = reservations.find(r => {
+          const rYmd = toYmd(r.date?.toDate?.() ?? new Date(r.date));
+          const other = !selfProjectId || r.projectId !== selfProjectId;
+          return other && r.vehicleId === vid && rYmd === ymd;
+        });
+        if (hit) conflicts.push({ date: ymd, vehicleId: vid });
+      }
+    }
+    return conflicts;
+  }, []);
 
   const handleSaveVehicles = async () => {
     try {
       const { by, byName } = await resolveCurrentUser();
+      // 0) 競合の最終チェック（日単位）
+      const conflicts = await checkVehicleConflicts(vehicleSelections, datesInRange, projectId);
+      if (conflicts.length) {
+        const lines = conflicts.map(c => `・${c.date} / vehicleId=${c.vehicleId}`).join('\n');
+        Alert.alert('車両の競合', `以下の日は他案件で使用中です。\n${lines}`);
+        return;
+      }
       // project.vehiclePlan と予約を同期
       const vehiclePlan = {};
       Object.entries(vehicleSelections || {}).forEach(([ymd, sel]) => {

@@ -16,6 +16,7 @@ import {
   setProject,
   fetchAllUsers,
   findEmployeeByIdOrEmail,
+  fetchProjectsOverlappingRange,
 } from '../../firestoreService';
 import { Picker } from '@react-native-picker/picker';
 import {
@@ -235,29 +236,67 @@ export default function ProjectRegisterScreen({ route }) {
       const startTs = Timestamp.fromDate(new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0,0,0,0));
       const endTs   = Timestamp.fromDate(new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23,59,59,999));
 
-      const blocks = await fetchVehicleBlocksOverlapping(startTs, endTs);
-      const reservations = await fetchReservationsInRange(startTs, endTs);
+      const [blocks, reservations] = await Promise.all([
+        fetchVehicleBlocksOverlapping(startTs, endTs),
+        fetchReservationsInRange(startTs, endTs),
+      ]);
+      // 予約の相手プロジェクト群（期間にかすっているものだけ）をまとめて取得
+      const overlappedProjects = await fetchProjectsOverlappingRange(
+        new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0,0,0,0),
+        new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23,59,59,999)
+      );
+      const projMap = Object.fromEntries((overlappedProjects || []).map(p => [p.id, p]));
 
       const map = {};
       datesInRange.forEach(d => { map[toYmd(d)] = new Set(); });
+      // この画面で入力中の「自プロジェクトのその日ごとの時間窓」を求める
+      const dayWindow = (d) => {
+        const sd = startDate, ed = endDate;
+        const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0);
+        const dayEnd   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23,59,59,999);
+        const clampStart =
+          (sd <= dayStart && ed >= dayEnd) ? dayStart :
+          (toYmd(sd) === toYmd(d)) ? sd : dayStart;
+        const clampEnd =
+          (sd <= dayStart && ed >= dayEnd) ? dayEnd :
+          (toYmd(ed) === toYmd(d)) ? ed : dayEnd;
+        return [clampStart, clampEnd];
+      };
+      const overlaps = (a1, a2, b1, b2) => a1 < b2 && b1 < a2; // 端がピッタリは非重複扱い
 
       // 使用不可：車検/修理ブロック
       for (const b of blocks) {
         const bs = b.startDate.toDate ? b.startDate.toDate() : new Date(b.startDate);
         const be = b.endDate.toDate ? b.endDate.toDate() : new Date(b.endDate);
         for (const d of datesInRange) {
-          const dd = dateOnly(d);
-          if (dd >= dateOnly(bs) && dd <= dateOnly(be)) {
-            map[toYmd(d)].add(b.vehicleId);
-          }
+          const [meS, meE] = dayWindow(d);
+          if (overlaps(meS, meE, bs, be)) map[toYmd(d)].add(b.vehicleId);
         }
       }
       // 使用不可：他プロジェクト予約
       for (const r of reservations) {
-        if (editingProjectId && r.projectId === editingProjectId) continue;
-        const dy = toYmd(r.date.toDate ? r.date.toDate() : new Date(r.date));
-        if (!map[dy]) map[dy] = new Set();
-        map[dy].add(r.vehicleId);
+        if (editingProjectId && r.projectId === editingProjectId) continue; // 自案件は除外
+        const other = projMap[r.projectId];
+        if (!other) continue;
+        const oS = other.startDate?.toDate?.() ?? new Date(other.startDate);
+        const oE = (other.endDate?.toDate?.() ?? new Date(other.endDate || other.startDate));
+        const d  = (r.date?.toDate?.() ?? new Date(r.date));
+        const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        const [meS, meE] = dayWindow(day);
+        // 相手プロジェクトのその日の時間窓
+        const oDayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0,0,0,0);
+        const oDayEnd   = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23,59,59,999);
+        const oClampS =
+          (oS <= oDayStart && oE >= oDayEnd) ? oDayStart :
+          (toYmd(oS) === toYmd(day)) ? oS : oDayStart;
+        const oClampE =
+          (oS <= oDayStart && oE >= oDayEnd) ? oDayEnd :
+          (toYmd(oE) === toYmd(day)) ? oE : oDayEnd;
+        if (overlaps(meS, meE, oClampS, oClampE)) {
+          const dy = toYmd(day);
+          if (!map[dy]) map[dy] = new Set();
+          map[dy].add(r.vehicleId);
+        }
       }
       setUnavailableMap(map);
 
@@ -276,7 +315,7 @@ export default function ProjectRegisterScreen({ route }) {
         setVehicleSelections({});
       }
     })();
-  }, [datesInRange.length, editingProjectId, vehiclesById]);
+  }, [dateOnly(startDate).getTime(), dateOnly(endDate).getTime(), editingProjectId, vehiclesById]);
 
   const onPickVehicle = (ymd, type, vehicleId) => {
     const blocked = !!vehicleId && unavailableMap[ymd]?.has(vehicleId);
@@ -295,6 +334,32 @@ export default function ProjectRegisterScreen({ route }) {
     await loadProjects();
     setRefreshing(false);
   }, [loadProjects]);
+
+  // --- 保存前・競合チェック（日単位） ---
+  const checkVehicleConflicts = useCallback(async (selections, dates, selfProjectId) => {
+    if (!dates?.length) return [];
+    const s = dates[0];
+    const e = dates[dates.length - 1];
+    const startTs = Timestamp.fromDate(new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0,0,0,0));
+    const endTs   = Timestamp.fromDate(new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23,59,59,999));
+    const reservations = await fetchReservationsInRange(startTs, endTs);
+    const conflicts = [];
+    for (const d of dates) {
+      const ymd = toYmd(d);
+      const sel = selections[ymd] || {};
+      for (const t of ['sales','cargo']) {
+        const vid = sel[t];
+        if (!vid) continue;
+        const hit = reservations.find(r => {
+          const rYmd = toYmd(r.date?.toDate?.() ?? new Date(r.date));
+          const other = !selfProjectId || r.projectId !== selfProjectId;
+          return other && r.vehicleId === vid && rYmd === ymd;
+        });
+        if (hit) conflicts.push({ date: ymd, vehicleId: vid });
+      }
+    }
+    return conflicts;
+  }, []);
 
   // ─────────────────────────────
   // 左フォームに値を流し込むヘルパー
@@ -424,6 +489,14 @@ useEffect(() => {
     }    
     setLoading(true);
     try {
+      // 1) 競合の最終チェック（日単位）
+      const conflicts = await checkVehicleConflicts(vehicleSelections, datesInRange, editingProjectId);
+      if (conflicts.length) {
+        const lines = conflicts.map(c => `・${c.date} / vehicleId=${c.vehicleId}`).join('\n');
+        Alert.alert('車両の競合', `以下の日は他案件で使用中です。\n${lines}`);
+        setLoading(false);
+        return;
+      }
       const actor = {
         by:     me?.id ?? route?.params?.userEmail ?? null,
         byName: me?.name ?? null,
