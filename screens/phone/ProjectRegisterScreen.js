@@ -80,7 +80,7 @@ const formatThousandsInput = (text) => {
 // ── 追加: コスト計算用の定数
 const EMPLOYEE_HOURLY = 2000;
 const EXTERNAL_HOURLY  = 2800;
-const RENTAL_PER_SQM   = 70000;
+const RENTAL_PER_SQM   = 7;
 
 // 日付のみ（00:00）に正規化
 const dateOnly = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
