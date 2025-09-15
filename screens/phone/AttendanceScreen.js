@@ -12,7 +12,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
-import { DateContext } from '../../DateContext';
 import { fetchUserByEmail, fetchAttendanceByEmployeeAndDate, requestPunch } from '../../firestoreService';
 
 import {
@@ -36,7 +35,11 @@ export default function AttendanceScreen({ route }) {
   console.log('[AttendanceScreen] route.params.userEmail:', route.params?.userEmail);
 
   const userEmail = route.params?.userEmail ?? 'admin';
-  const { date: selectedDate, setDate } = useContext(DateContext);
+  // この画面は“初期表示は常に本日”にする（DateContext とは切り離す）
+  const [currentDate, setCurrentDate] = useState(() => new Date()); // ← 初期値 = 本日
+  // ※もし「常に本日に固定（ピッカー変更も無効）」にしたい場合は、
+  //   下の useEffect を有効化してください（画面表示のたびに今日へ強制リセット）
+  // useEffect(() => { setCurrentDate(new Date()); }, []);
 
   // ▼ 追加: 区分・所属も保持
   const [userName, setUserName] = useState('');
@@ -51,7 +54,13 @@ export default function AttendanceScreen({ route }) {
   const [intoxicated, setIntoxicated] = useState(null);   // true=あり  / false=なし
   const acCompleted = deviceUsed !== null && intoxicated !== null;
 
-  const dateKey = d => d.toISOString().slice(0, 10);
+  // 端末のローカルタイムゾーン(JST)で日付キーを生成
+  const dateKey = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
 
   // ユーザー名/区分/所属ロード
   useEffect(() => {
@@ -69,7 +78,7 @@ export default function AttendanceScreen({ route }) {
   const loadRecords = async () => {
     const list = await fetchAttendanceByEmployeeAndDate(
       userEmail,
-      dateKey(selectedDate)
+      dateKey(currentDate)
     );
     // 出勤を先、退勤を後でソート
     const ins = list.filter(i => i.type === 'in');
@@ -80,7 +89,7 @@ export default function AttendanceScreen({ route }) {
   // 日付変更・初回ロード
   useEffect(() => {
     loadRecords();
-  }, [selectedDate]);
+  }, [currentDate]);
 
   // recordInputs 初期化
   useEffect(() => {
@@ -98,7 +107,7 @@ export default function AttendanceScreen({ route }) {
   useEffect(() => {
     if (Platform.OS === 'android' && showDatePicker) {
       DateTimePickerAndroid.open({
-        value: selectedDate,
+        value: currentDate,
         onChange: onDateChange,
         mode: 'date',
       });
@@ -111,7 +120,7 @@ export default function AttendanceScreen({ route }) {
       if (!acCompleted) return; // 二重防止（UIでも無効化）
       await requestPunch({
         employeeId: userEmail,
-        dateStr: dateKey(selectedDate),
+        dateStr: dateKey(currentDate),
         type,
         time: new Date(),
         alcoholCheck: { deviceUsed, intoxicated },
@@ -126,7 +135,7 @@ export default function AttendanceScreen({ route }) {
     if (isNaN(val)) return;
     const hh = Math.floor(val / 100);
     const mm = val % 100;
-    const dt = new Date(selectedDate);
+    const dt = new Date(currentDate);
     dt.setHours(hh, mm, 0, 0);
     await updateDoc(doc(db, 'attendanceRecords', id), {
       timestamp: Timestamp.fromDate(dt),
@@ -137,7 +146,7 @@ export default function AttendanceScreen({ route }) {
   // 日付ピックハンドラ
   const onDateChange = (_, d) => {
     if (!d) return;
-    setDate(d);
+    setCurrentDate(d);
   };
 
   // HH:MM 表示
@@ -189,12 +198,12 @@ return (
     <View>
       <View style={tw`flex-row items-center p-4 bg-white border-b border-gray-300`}>
         <TouchableOpacity style={tw`flex-1`} onPress={() => setShowDatePicker(true)}>
-          <Text style={tw`text-lg text-center`}>{dateKey(selectedDate)}</Text>
+          <Text style={tw`text-lg text-center`}>{dateKey(currentDate)}</Text>
         </TouchableOpacity>
       </View>
       {Platform.OS === 'ios' && showDatePicker ? (
         <DateTimePicker
-          value={selectedDate}
+          value={currentDate}
           mode="date"
           display="default"
           onChange={onDateChange}
