@@ -205,6 +205,7 @@ export default function ProjectRegisterScreen({ route }) {
   const [vehicleSelections, setVehicleSelections] = useState({});
   // { 'YYYY-MM-DD': Set(vehicleId) }
   const [unavailableMap, setUnavailableMap] = useState({});
+  const [availLoading, setAvailLoading] = useState(false);
   const vehiclesById = useMemo(
     () => Object.fromEntries((vehicles || []).map(v => [v.id, v])),
     [vehicles]
@@ -230,6 +231,7 @@ export default function ProjectRegisterScreen({ route }) {
   // 期間の空き状況（既予約・車検/修理）を算出
   useEffect(() => {
     (async () => {
+      setAvailLoading(true);
       if (datesInRange.length === 0) { setUnavailableMap({}); setVehicleSelections({}); return; }
       const s = datesInRange[0];
       const e = datesInRange[datesInRange.length - 1];
@@ -314,8 +316,8 @@ export default function ProjectRegisterScreen({ route }) {
       } else {
         setVehicleSelections({});
       }
-    })();
-  }, [dateOnly(startDate).getTime(), dateOnly(endDate).getTime(), editingProjectId, vehiclesById]);
+    })().finally(() => setAvailLoading(false));
+ }, [startDate.getTime(), endDate.getTime(), editingProjectId, vehiclesById]);
 
   const onPickVehicle = (ymd, type, vehicleId) => {
     const blocked = !!vehicleId && unavailableMap[ymd]?.has(vehicleId);
@@ -730,6 +732,10 @@ useEffect(() => {
                 const merged = new Date(d);
                 merged.setHours(startDate.getHours(), 0, 0, 0);
                 setStartDate(merged);
+                // 終了日が開始日より前なら引き上げる
+                if (dateOnly(endDate) < dateOnly(merged)) {
+                  setEndDate(new Date(merged)); // 同日・同時刻に合わせる
+                }
               }
             }}
           />
@@ -754,6 +760,10 @@ useEffect(() => {
                 const d = new Date(startDate);
                 d.setHours(t.getHours(), t.getMinutes(), 0, 0);
                 setStartDate(d);
+              // 同じ日で終了時刻が開始より前なら引き上げる
+              if (toYmd(endDate) === toYmd(d) && endDate < d) {
+                setEndDate(new Date(d));
+              }
               }
             }}
           />
@@ -777,7 +787,7 @@ useEffect(() => {
               if (d) {
                 const merged = new Date(d);
                 merged.setHours(endDate.getHours(), 0, 0, 0);
-                setEndDate(merged);
+                setEndDate(dateOnly(merged) < dateOnly(startDate) ? new Date(startDate) : merged);
               }
             }}
           />
@@ -800,7 +810,7 @@ useEffect(() => {
               if (t) {
                 const d = new Date(endDate);
                 d.setHours(t.getHours(), t.getMinutes(), 0, 0);
-                setEndDate(d);
+                setEndDate(d < startDate ? new Date(startDate) : d);
               }
             }}
           />
@@ -817,7 +827,7 @@ useEffect(() => {
           const cargoList = vehicles.filter(v => (v?.vehicleType || 'sales') === 'cargo');
           const RenderGroup = ({ title, type, list }) => (
             <View style={tw`mb-3`}>
-              <Text style={tw`mb-1`}>{title}</Text>
+              <Text style={tw`mb-1`}>{title}{availLoading ? '（判定中…）' : ''}</Text>
               {list.length === 0 ? (
                 <Text style={tw`text-gray-500`}>該当車両なし</Text>
               ) : (
@@ -828,17 +838,18 @@ useEffect(() => {
                     return (
                       <TouchableOpacity
                         key={v.id}
-                        disabled={isBlocked}
+                        disabled={isBlocked || availLoading}
                         onPress={() => onPickVehicle(ymd, type, isSelected ? undefined : v.id)}
                         activeOpacity={0.7}
                         style={tw.style(
                           'm-1 px-3 py-2 rounded border',
-                          isBlocked
-                            ? 'bg-gray-200 border-gray-300 opacity-50'
-                            : (isSelected
-                                ? 'bg-blue-100 border-blue-400'
-                                : 'bg-white border-gray-300'
-                              )
+                           (isBlocked
+                              ? 'bg-gray-200 border-gray-300 opacity-50'
+                              : (availLoading
+                                  ? 'bg-gray-100 border-gray-300 opacity-60'
+                                  : (isSelected
+                                      ? 'bg-blue-100 border-blue-400'
+                                      : 'bg-white border-gray-300')))
                         )}
                       >
                         <Text>{isSelected ? '☑ ' : '☐ '}{v.name}</Text>
