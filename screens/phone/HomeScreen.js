@@ -1,15 +1,17 @@
 // screens/phone/HomeScreen.js
-import React, { useEffect, useState, useContext } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Button } from 'react-native';
+import React, { useEffect, useState, useContext, useRef, useCallback } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Button, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
 import { DateContext } from '../../DateContext';
-import { fetchProjects, findEmployeeByIdOrEmail } from '../../firestoreService';
+import { fetchProjectsOverlappingRange, findEmployeeByIdOrEmail } from '../../firestoreService';
+import { useFocusEffect } from '@react-navigation/native';
 
 export default function HomeScreen({ navigation, route }) {
   console.log('[HomeScreen] got userEmail =', route?.params?.userEmail);
   const { date: selectedDate, setDate } = useContext(DateContext);
+  const TTL_MS = 60 * 1000; // 60秒
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState([]);
   const [showPicker, setShowPicker] = useState(false);
@@ -18,6 +20,11 @@ export default function HomeScreen({ navigation, route }) {
 
   // 追加: 従業員マップ（id/loginId/email → name）
   const [employeeMap, setEmployeeMap] = useState({});
+  // TTL / 重複fetchガード
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const lastFetchRef = useRef({ key: null, at: 0 });
+  const reqSeqRef = useRef(0);
+  const refreshingRef = useRef(false);
 
   useEffect(() => {
     let mounted = true;
@@ -60,58 +67,69 @@ export default function HomeScreen({ navigation, route }) {
     if (d) setDate(d);
   };
 
-  // プロジェクト取得・フィルタ + 従業員名マップ作成
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      try {
-        const all = await fetchProjects();
+  // ▼ 取得処理（TTL+重複fetchガード、サーバ側フィルタ）
+  const loadProjects = useCallback(async ({ force = false, withSpinner = false } = {}) => {
+    const key = dateKey(selectedDate);
+    const now = Date.now();
+    const isStale =
+      force ||
+      lastFetchRef.current.key !== key ||
+      now - lastFetchRef.current.at > TTL_MS;
+    if (!isStale || refreshingRef.current) return;
 
-        // 選択日の 00:00〜23:59:59
-        const selStart = new Date(selectedDate); selStart.setHours(0, 0, 0, 0);
-        const selEnd   = new Date(selectedDate); selEnd.setHours(23, 59, 59, 999);
-        const selKey   = dateKey(selectedDate);
+    const mySeq = ++reqSeqRef.current;
+    refreshingRef.current = true;
+    if (projects.length === 0) setLoading(true);
+    let didSetSpinner = false;
+    if (withSpinner) {
+      setIsRefreshing(true); didSetSpinner = true;
+    }
+    try {
+      // 選択日の 00:00〜23:59:59
+      const selStart = new Date(selectedDate); selStart.setHours(0, 0, 0, 0);
+      const selEnd   = new Date(selectedDate); selEnd.setHours(23, 59, 59, 999);
 
-        const filtered = (all || []).filter(p => {
-          const s = asDate(p.startDate) || asDate(p.start) || asDate(p.startAt) || asDate(p.scheduledStart);
-          const e = asDate(p.endDate)   || asDate(p.end)   || asDate(p.endAt)   || s;
-          const overlap = (s && e) ? (s <= selEnd && e >= selStart) : false;
-          const hasKey  = p?.dateKey === selKey || p?.scheduledDate === selKey || (Array.isArray(p?.dates) && p.dates.includes(selKey));
-          return overlap || hasKey || (!s && !e); // 未設定も一旦表示
-        }).sort((a, b) => {
-          const dA = asDate(a.startDate) || asDate(a.start) || asDate(a.startAt) || 0;
-          const dB = asDate(b.startDate) || asDate(b.start) || asDate(b.startAt) || 0;
-          return (dA ? dA.getTime() : 0) - (dB ? dB.getTime() : 0);
-        });
+      // ★ サーバ側で重なりのみ取得
+      const list = await fetchProjectsOverlappingRange(selStart, selEnd);
+      if (mySeq !== reqSeqRef.current) return; // 古い応答は破棄
 
-        setProjects(filtered);
+      // 表示順：開始時刻昇順
+      const sorted = (list || []).sort((a, b) => {
+        const dA = asDate(a.startDate) || asDate(a.start) || asDate(a.startAt) || 0;
+        const dB = asDate(b.startDate) || asDate(b.start) || asDate(b.startAt) || 0;
+        return (dA ? dA.getTime() : 0) - (dB ? dB.getTime() : 0);
+      });
+      setProjects(sorted);
 
-        // --- ここで従業員名マップを構築（projects.management 等のIDを name に解決）---
-        const idFields = ['management', 'sales', 'design', 'survey'];
-        const ids = Array.from(new Set(
-          filtered.flatMap(p => idFields.map(k => p?.[k]).filter(Boolean))
-        ));
+      // 従業員名マップ
+      const idFields = ['management', 'sales', 'design', 'survey'];
+      const ids = Array.from(new Set(sorted.flatMap(p => idFields.map(k => p?.[k]).filter(Boolean))));
+      const pairs = await Promise.all(ids.map(async (id) => {
+        try {
+          const emp = await findEmployeeByIdOrEmail(id);
+          const name = emp?.name || emp?.displayName || '';
+          return [id, name || String(id)];
+        } catch {
+          return [id, String(id)];
+        }
+      }));
+      const map = {}; pairs.forEach(([id, name]) => { map[id] = name; });
+      setEmployeeMap(map);
 
-        // findEmployeeByIdOrEmail は email/loginId向けだが、loginId=「b」のように docId と同値を前提に解決を試行
-        const pairs = await Promise.all(ids.map(async (id) => {
-          try {
-            const emp = await findEmployeeByIdOrEmail(id);
-            const name = emp?.name || emp?.displayName || '';
-            return [id, name || String(id)];
-          } catch {
-            return [id, String(id)];
-          }
-        }));
-        const map = {};
-        pairs.forEach(([id, name]) => { map[id] = name; });
-        setEmployeeMap(map);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [selectedDate]);
+      lastFetchRef.current = { key, at: now };
+    } catch (e) {
+      console.error('[HomeScreen] loadProjects error:', e?.message || e);
+    } finally {
+      refreshingRef.current = false;
+      if (didSetSpinner) setIsRefreshing(false);
+      setLoading(false);
+    }
+  }, [selectedDate, projects.length]);
+
+  // 画面フォーカス時：TTLに従って再取得
+  useFocusEffect(useCallback(() => { loadProjects({ force: false, withSpinner: false }); }, [loadProjects]));
+  // 日付変更時：強制更新
+  useEffect(() => { loadProjects({ force: true, withSpinner: false }); }, [selectedDate, loadProjects]);
 
   if (loading) {
     return (
@@ -145,7 +163,15 @@ export default function HomeScreen({ navigation, route }) {
         />
       )}
 
-      <ScrollView contentContainerStyle={tw`p-4`}>
+      <ScrollView
+        contentContainerStyle={tw`p-4`}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={() => loadProjects({ force: true, withSpinner: true })}
+          />
+        }
+      >
         {projects.length === 0 ? (
           <Text style={tw`text-center text-gray-500`}>本日のプロジェクトはありません</Text>
         ) : (

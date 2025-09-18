@@ -1,15 +1,17 @@
 // WIPScreenの成功パターンを参考にしたOverallScreen.js
-import React, { useState, useContext, useEffect, useCallback } from 'react';
+import React, { useState, useContext, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  View, Text, TouchableOpacity, TextInput, ScrollView
+  View, Text, TouchableOpacity, TextInput, ScrollView, RefreshControl
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
 import { DateContext } from '../../DateContext';
 import DateHeader from '../../DateHeader';
 import { fetchProjectsOverlappingRange } from '../../firestoreService'; // ★ 追加
+import { useFocusEffect } from '@react-navigation/native';
 
 export default function OverallScreen({ navigation, route }) {
+  const TTL_MS = 60 * 1000; // 60秒
   const { date: selectedDate, setDate } = useContext(DateContext);
   const [showPicker, setShowPicker] = useState(false);
   const onDateChange = (_event, d) => {
@@ -34,17 +36,16 @@ export default function OverallScreen({ navigation, route }) {
     newOrders: 0,       // 新規受注件数
   });
 
-  // 指定日の00:00～23:59に正規化
-  const dayStart = new Date(
-    selectedDate.getFullYear(),
-    selectedDate.getMonth(),
-    selectedDate.getDate(), 0, 0, 0, 0
-  );
-  const dayEnd = new Date(
-    selectedDate.getFullYear(),
-    selectedDate.getMonth(),
-    selectedDate.getDate(), 23, 59, 59, 999
-  );
+  // 指定日の00:00～23:59に正規化（参照を安定化）
+  const { dayStart, dayEnd } = useMemo(() => {
+    const ds = new Date(
+      selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate(), 0, 0, 0, 0
+    );
+    const de = new Date(
+      selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate(), 23, 59, 59, 999
+    );
+    return { dayStart: ds, dayEnd: de };
+  }, [selectedDate]);
 
   // 日付のみ比較
   const dateOnly = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -54,28 +55,44 @@ export default function OverallScreen({ navigation, route }) {
   // Firestore Timestamp or Date → Date
   const toDate = (v) => (v?.toDate ? v.toDate() : (v ? new Date(v) : null));
 
-  // 合計を計算
-  useEffect(() => {
-    (async () => {
+  // ▼ TTL + 重複fetchガード
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const lastFetchRef = useRef({ key: null, at: 0 });
+  const reqSeqRef = useRef(0);
+  const refreshingRef = useRef(false);
+  const dateKey = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const loadTotals = useCallback(async ({ force = false, withSpinner = false } = {}) => {
+    const key = dateKey(selectedDate);
+    const now = Date.now();
+    const isStale =
+      force ||
+      lastFetchRef.current.key !== key ||
+      now - lastFetchRef.current.at > TTL_MS;
+    if (!isStale || refreshingRef.current) return;
+
+    const mySeq = ++reqSeqRef.current;
+    refreshingRef.current = true;
+    let didSetSpinner = false;
+    if (withSpinner) {
+      setIsRefreshing(true); didSetSpinner = true;
+    }
+    try {
       const list = await fetchProjectsOverlappingRange(dayStart, dayEnd);
+      if (mySeq !== reqSeqRef.current) return; // 古い応答は破棄
 
-      let sales = 0;
-      let labor = 0;
-      let transport = 0;
-      let misc = 0;
-      let rentals = 0;
-      let newOrders = 0;
-
+      let sales = 0, labor = 0, transport = 0, misc = 0, rentals = 0, newOrders = 0;
       for (const proj of list) {
         const s = toDate(proj.startDate);
-        const e = toDate(proj.endDate) || s; // endDateがnullなら単日扱い
-
-        // 受注金額合計
+        const e = toDate(proj.endDate) || s;
         sales += Number(proj.orderAmount || 0);
-
-        // 人件費：単日案件はそのまま、複数日案件は日割り（=総額/日数）
         const totalLabor = Number(proj.laborCost || 0);
-        const isMulti = s.toDateString() !== e.toDateString();
+        const isMulti = s && e && (s.toDateString() !== e.toDateString());
         if (totalLabor > 0) {
           if (isMulti) {
             const days = Math.max(1, diffDaysInclusive(s, e));
@@ -84,31 +101,28 @@ export default function OverallScreen({ navigation, route }) {
             labor += totalLabor;
           }
         }
-
-        // 交通費・諸経費 合計
         transport += Number(proj.travelCost || 0);
-        misc += Number(proj.miscExpense || 0);
-
-        // レンタル・リソース費用（保存値が無ければ後方互換で areaSqm * 70000）
+        misc      += Number(proj.miscExpense || 0);
         const rr = (proj.rentalResourceCost != null)
           ? Number(proj.rentalResourceCost)
           : Number(proj.areaSqm || 0) * 70000;
         rentals += rr;
-
-        // 新規受注件数
         if (proj.projectType === 'new') newOrders += 1;
       }
+      setTotals({ sales, laborCost: labor, transportCost: transport, miscCost: misc, rentals, newOrders });
+      lastFetchRef.current = { key, at: now };
+    } catch (e) {
+      console.warn('[OverallScreen] loadTotals error:', e?.message || e);
+    } finally {
+      refreshingRef.current = false;
+      if (didSetSpinner) setIsRefreshing(false);
+    }
+  }, [selectedDate, dayStart, dayEnd]);
 
-      setTotals({
-        sales,
-        laborCost: labor,
-        transportCost: transport,
-        miscCost: misc,
-        rentals,
-        newOrders,
-      });
-    })();
-  }, [selectedDate]); // selectedDateが変わるたび再計算
+  // 画面フォーカス時：TTLに従って再取得
+  useFocusEffect(useCallback(() => { loadTotals({ force: false, withSpinner: false }); }, [loadTotals]));
+  // 日付変更時：強制更新
+  useEffect(() => { loadTotals({ force: true, withSpinner: false }); }, [selectedDate, loadTotals]); 
 
   // WIPScreenと同じ方式でinputs管理（手入力が必要な項目だけ使う）
   const [inputs, setInputs] = useState({});
@@ -162,6 +176,12 @@ export default function OverallScreen({ navigation, route }) {
       <ScrollView
         style={tw`flex-1`}
         contentContainerStyle={tw`p-4`}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={() => loadTotals({ force: true, withSpinner: true })}
+          />
+        }        
       >
         <View style={tw`flex-row`}>
           {/* 左：ボタン列 */}
