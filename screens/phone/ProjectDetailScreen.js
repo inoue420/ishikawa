@@ -38,10 +38,9 @@ import {
 import {
   fetchVehicles,
   fetchVehicleBlocksOverlapping,
-  fetchReservationsInRange,
+  fetchReservationsByYmdRange,
   fetchReservationsForProject,
-  setVehicleReservation,
-  clearReservationsForProject,
+  saveProjectVehiclePlan,
 } from '../../firestoreService';
 import { Timestamp } from 'firebase/firestore';
 
@@ -62,6 +61,11 @@ const toYmd = (d) => {
   const dd = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${dd}`;
 };
+// Set をログしやすい形（配列）に変換
+const setMapToPlainObject = (mapObj) =>
+  Object.fromEntries(
+    Object.entries(mapObj || {}).map(([k, v]) => [k, Array.from(v || [])])
+  );
 
 export default function ProjectDetailScreen({ route }) {
   const navigation = useNavigation();
@@ -121,6 +125,7 @@ export default function ProjectDetailScreen({ route }) {
   // 選択と空き状況
   const [vehicleSelections, setVehicleSelections] = useState({}); // { 'YYYY-MM-DD': { sales?: id, cargo?: id } }
   const [unavailableMap, setUnavailableMap] = useState({});       // { 'YYYY-MM-DD': Set(vehicleId) }
+  const [availLoading, setAvailLoading] = useState(false); 
 
   // プロジェクトの開始/終了（Date）→ 期間配列
   const projStart = useMemo(() => toDateMaybe(project?.startDate), [project?.startDate]);
@@ -232,105 +237,88 @@ export default function ProjectDetailScreen({ route }) {
       }
     })();
   }, []);  
-  // 期間の空き状況（他プロジェクト予約 / 車検・修理）と選択のプリフィル
- useEffect(() => {
-   if (project?.vehiclePlan && Object.keys(project.vehiclePlan).length) {
-     setVehicleSelections(project.vehiclePlan);
-   }
- }, [project?.vehiclePlan]);
-
+  // 保存済み vehiclePlan があればプリフィル
   useEffect(() => {
+    if (project?.vehiclePlan && Object.keys(project.vehiclePlan).length) {
+      setVehicleSelections(project.vehiclePlan);
+    }
+  }, [project?.vehiclePlan]);
+
+  // 期間の空き状況（“同じ日なら不可”）
+  useEffect(() => {
+    let cancelled = false;
     (async () => {
       if (datesInRange.length === 0) {
         setUnavailableMap({});
         setVehicleSelections(project?.vehiclePlan || {});
         return;
       }
+      setAvailLoading(true);
       const s = datesInRange[0];
       const e = datesInRange[datesInRange.length - 1];
-      const startTs = Timestamp.fromDate(new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0,0,0,0));
-      const endTs   = Timestamp.fromDate(new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23,59,59,999));
+      const startKey = toYmd(s);
+      const endKey   = toYmd(e);
+      const startTs  = Timestamp.fromDate(new Date(`${startKey}T00:00:00`));
+      const endTs    = Timestamp.fromDate(new Date(`${endKey}T23:59:59.999`));
+      try {
+        const [blocks, reservations] = await Promise.all([
+          fetchVehicleBlocksOverlapping(startTs, endTs),
+          fetchReservationsByYmdRange(startKey, endKey),
+        ]);
 
-      const [blocks, reservations] = await Promise.all([
-        fetchVehicleBlocksOverlapping(startTs, endTs),
-        fetchReservationsInRange(startTs, endTs),
-      ]);
-      const overlappedProjects = await fetchProjectsOverlappingRange(
-        new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0,0,0,0),
-        new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23,59,59,999)
-      );
-      const projMap = Object.fromEntries((overlappedProjects || []).map(p => [p.id, p]));
-
+      // ymd -> Set<vehicleId>
       const map = {};
       datesInRange.forEach(d => { map[toYmd(d)] = new Set(); });
 
-      // 自案件のその日ごとの時間窓
-      const pS = toDateMaybe(project?.startDate);
-      const pE = toDateMaybe(project?.endDate) || pS;
-      const dayWindow = (d) => {
-        const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0);
-        const dayEnd   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23,59,59,999);
-        const clampStart =
-          (pS <= dayStart && pE >= dayEnd) ? dayStart :
-          (toYmd(pS) === toYmd(d)) ? pS : dayStart;
-        const clampEnd =
-          (pS <= dayStart && pE >= dayEnd) ? dayEnd :
-          (toYmd(pE) === toYmd(d)) ? pE : dayEnd;
-        return [clampStart, clampEnd];
-      };
-      const overlaps = (a1, a2, b1, b2) => a1 < b2 && b1 < a2;
-
-      // 使用不可：車検/修理ブロック（時間帯重複のみ）
+      // 車検/修理：その日の 0:00–23:59 と重なれば不可
       for (const b of blocks) {
         const bs = b.startDate?.toDate?.() ?? new Date(b.startDate);
-        const be = b.endDate?.toDate?.() ?? new Date(b.endDate);
+        const be = b.endDate?.toDate?.()   ?? new Date(b.endDate);
         for (const d of datesInRange) {
-          const [meS, meE] = dayWindow(d);
-          if (overlaps(meS, meE, bs, be)) map[toYmd(d)].add(b.vehicleId);
+          const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0);
+          const dayEnd   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23,59,59,999);
+          if (dayStart <= be && bs <= dayEnd) {
+            map[toYmd(d)].add(b.vehicleId);
+          }
         }
       }
-      // 使用不可：他プロジェクトの予約（自プロジェクトの予約は除外して編集できるようにする）
+      // 他プロジェクトの予約：同じ日なら不可
       for (const r of reservations) {
-        if (r.projectId === projectId) continue;
-        const other = projMap[r.projectId];
-        if (!other) continue;
-        const oS = other.startDate?.toDate?.() ?? new Date(other.startDate);
-        const oE = (other.endDate?.toDate?.() ?? new Date(other.endDate || other.startDate));
-        const d  = (r.date?.toDate?.() ?? new Date(r.date));
-        const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-        const [meS, meE] = dayWindow(day);
-        const oDayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0,0,0,0);
-        const oDayEnd   = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23,59,59,999);
-        const oClampS =
-          (oS <= oDayStart && oE >= oDayEnd) ? oDayStart :
-          (toYmd(oS) === toYmd(day)) ? oS : oDayStart;
-        const oClampE =
-          (oS <= oDayStart && oE >= oDayEnd) ? oDayEnd :
-          (toYmd(oE) === toYmd(day)) ? oE : oDayEnd;
-        if (overlaps(meS, meE, oClampS, oClampE)) {
-          const dy = toYmd(day);
-          if (!map[dy]) map[dy] = new Set();
-          map[dy].add(r.vehicleId);
-        }
+        if (r.projectId === projectId) continue; // 自案件は編集のため許可
+        const dy = r.dateKey || toYmd(r.date?.toDate?.() ?? new Date(r.date));
+        if (map[dy]) map[dy].add(r.vehicleId);
       }
-      setUnavailableMap(map);
+      if (!cancelled) setUnavailableMap(map);
 
-      // プリフィル：プロジェクト保存済みの vehiclePlan を最優先、なければ既存予約から推定
+      // プリフィル：保存済みがあれば最優先、なければ自案件の予約から推定
       if (project?.vehiclePlan && Object.keys(project.vehiclePlan).length) {
-        setVehicleSelections(project.vehiclePlan);
+        if (!cancelled) setVehicleSelections(project.vehiclePlan);
       } else {
         const mine = await fetchReservationsForProject(projectId);
         const next = {};
         for (const r of mine) {
-          const dy = toYmd(r.date?.toDate?.() ?? new Date(r.date));
+          const dy = r.dateKey || toYmd(r.date?.toDate?.() ?? new Date(r.date));
           const v  = vehiclesById[r.vehicleId];
-          const t  = (v?.vehicleType || 'sales');
+          const t  = (v?.vehicleType || 'sales'); // 'sales' | 'cargo'
           next[dy] = { ...(next[dy] || {}), [t]: r.vehicleId };
         }
-        setVehicleSelections(next);
+        if (!cancelled) setVehicleSelections(next);
+      }
+      } catch (e) {
+        console.log('[availability] error', e);
+      } finally {
+        if (!cancelled) setAvailLoading(false);
       }
     })();
-   }, [projStart?.getTime(), projEnd?.getTime(), projectId, project?.vehiclePlan, vehiclesById]);
+    return () => { cancelled = true; };
+  }, [projStart?.getTime(), projEnd?.getTime(), projectId, project?.vehiclePlan, vehiclesById]);
+  // 状態が変わったら都度ダンプ
+  useEffect(() => {
+    console.log('[vehicles][debug] unavailableMap(state)', setMapToPlainObject(unavailableMap));
+  }, [unavailableMap]);
+  useEffect(() => {
+    console.log('[vehicles][debug] vehicleSelections(state)', vehicleSelections);
+  }, [vehicleSelections]);
 
   // 画像を選ぶ（送信時にまとめて投稿）
   const handlePickImage = async () => {
@@ -430,6 +418,7 @@ export default function ProjectDetailScreen({ route }) {
     }
   };
   const onPickVehicle = (ymd, type, vehicleId) => {
+    if (availLoading) return;
     const blocked = !!vehicleId && unavailableMap[ymd]?.has(vehicleId);
     if (blocked) {
       Alert.alert('選択不可', 'この日は選択した車両を使用できません（既予約／車検・修理）');
@@ -469,43 +458,30 @@ export default function ProjectDetailScreen({ route }) {
   const handleSaveVehicles = async () => {
     try {
       const { by, byName } = await resolveCurrentUser();
-      // 0) 競合の最終チェック（日単位）
-      const conflicts = await checkVehicleConflicts(vehicleSelections, datesInRange, projectId);
-      if (conflicts.length) {
-        const lines = conflicts.map(c => `・${c.date} / vehicleId=${c.vehicleId}`).join('\n');
-        Alert.alert('車両の競合', `以下の日は他案件で使用中です。\n${lines}`);
-        return;
-      }
-      // project.vehiclePlan と予約を同期
+      // 0) 保存ペイロード生成
       const vehiclePlan = {};
       Object.entries(vehicleSelections || {}).forEach(([ymd, sel]) => {
         const salesId = sel?.sales || null;
         const cargoId = sel?.cargo || null;
         if (salesId || cargoId) vehiclePlan[ymd] = { sales: salesId, cargo: cargoId };
       });
-      // ドキュメントに保存
+
+
+      // 1) 予約保存（Tx + 決め打ちID）※衝突時は例外
+      await saveProjectVehiclePlan(projectId, vehiclePlan, datesInRange);
+      // 2) プロジェクト側のキャッシュを更新
       await upsertProject(projectId, { vehiclePlan }, { by, byName });
-      // 予約を再作成（当該プロジェクト分を全クリア→再登録）
-      await clearReservationsForProject(projectId);
-      for (const d of datesInRange) {
-        const ymd = toYmd(d);
-        const sel = vehiclePlan[ymd] || {};
-        for (const t of ['sales','cargo']) {
-          const vid = sel[t];
-          if (!vid) continue;
-          await setVehicleReservation(
-            projectId,
-            new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0),
-            vid
-          );
-        }
-      }
       Alert.alert('保存しました', '車両割当てを更新しました。');
       // ローカル state も同期
       setProject(p => ({ ...(p || {}), vehiclePlan }));
     } catch (e) {
       console.error('[save vehicles] error', e);
-      Alert.alert('保存に失敗しました');
+      const msg = String(e?.message || e);
+      if (msg.startsWith('CONFLICT')) {
+        Alert.alert('車両の競合', '他のプロジェクトが同じ日・同じ車両を予約しています。\n別の車両を選択してください。');
+      } else {
+        Alert.alert('保存に失敗しました');
+      }
     }
   };
 
@@ -684,7 +660,7 @@ export default function ProjectDetailScreen({ route }) {
               const cargoList = vehicles.filter(v => (v?.vehicleType || 'sales') === 'cargo');
               const RenderGroup = ({ title, type, list }) => (
                 <View style={tw`mb-3`}>
-                  <Text style={tw`mb-1`}>{title}</Text>
+                 <Text style={tw`mb-1`}>{title}{availLoading ? '（判定中…）' : ''}</Text>
                   {list.length === 0 ? (
                     <Text style={tw`text-gray-500`}>該当車両なし</Text>
                   ) : (
@@ -695,20 +671,22 @@ export default function ProjectDetailScreen({ route }) {
                         return (
                           <TouchableOpacity
                             key={v.id}
-                            disabled={isBlocked}
+                            disabled={isBlocked || availLoading}
                             onPress={() => onPickVehicle(ymd, type, isSelected ? undefined : v.id)}
                             activeOpacity={0.7}
                             style={tw.style(
                               'm-1 px-3 py-2 rounded border',
                               isBlocked
                                 ? 'bg-gray-200 border-gray-300 opacity-50'
-                                : (isSelected
+                                : (availLoading
+                                    ? 'bg-gray-100 border-gray-300 opacity-60'
+                                    : (isSelected
                                     ? 'bg-blue-100 border-blue-400'
                                     : 'bg-white border-gray-300'
-                                  )
+                                  ))
                             )}
                           >
-                            <Text>{isSelected ? '☑ ' : '☐ '}<Text>{v.name}</Text></Text>
+                            <Text>{isSelected ? '☑ ' : '☐ '}{v.name}</Text>
                           </TouchableOpacity>
                         );
                       })}
@@ -726,9 +704,16 @@ export default function ProjectDetailScreen({ route }) {
             })
           )}
           <View style={tw`mt-3`}>
-            <TouchableOpacity onPress={handleSaveVehicles} activeOpacity={0.7} style={tw`bg-blue-600 rounded p-3 items-center`}>
-              <Text style={tw`text-white font-bold`}>車両を保存</Text>
-            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleSaveVehicles}
+              disabled={availLoading}
+              activeOpacity={0.7}
+              style={tw.style('rounded p-3 items-center', availLoading ? 'bg-blue-300' : 'bg-blue-600')}
+            >
+            <Text style={tw`text-white font-bold`}>
+              {availLoading ? '判定中…' : '車両を保存'}
+            </Text>
+          </TouchableOpacity>
           </View>
         </View>
 

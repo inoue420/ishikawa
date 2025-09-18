@@ -14,9 +14,10 @@ import {
   orderBy,  
   Timestamp,
   serverTimestamp,
-  writeBatch,        
+  writeBatch,     
+  runTransaction, 
 } from 'firebase/firestore';
-import { ref as sRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { ref as sRef, uploadBytes, getDownloadURL, deleteObject, uploadString } from 'firebase/storage';
 import { db, storage } from './firebaseConfig';
 import { getAuth } from 'firebase/auth';
 import * as FileSystem from 'expo-file-system';
@@ -1154,7 +1155,6 @@ export function debugStorageEnv() {
 /**
  * 文字列アップロードのプローブ：ルール/バケットの切り分け用
  */
-import { uploadString } from 'firebase/storage';
 export async function __testUploadPlainText(projectId, date) {
   const path = `projectPhotos/${projectId}/${date}/__probe.txt`;
   const fileRef = sRef(storage, path);
@@ -1210,14 +1210,29 @@ export async function fetchVehicleBlocksOverlapping(startTs, endTs) {
 }
 
 // ========= Vehicle reservations (per-day) =========
-// doc: { date:Timestamp(00:00), vehicleId, projectId }
+// ★ 予約ドキュメントは「日×車両」をユニークにするため docId を固定化
+//    docId: `${YYYY-MM-DD}_${vehicleId}`
+const ymd = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+};
+const day0 = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0);
+const reservationId = (ymdStr, vehicleId) => `${ymdStr}_${vehicleId}`;
+
+// 後方互換: 旧呼び出しからでも固定IDで保存されるよう変更
 export async function setVehicleReservation(projectId, dateMidnight, vehicleId) {
-  return addDoc(collection(db, 'vehicleReservations'), {
+  const y = ymd(dateMidnight);
+  const ref = doc(db, 'vehicleReservations', reservationId(y, vehicleId));
+  await setDoc(ref, {
     projectId,
     vehicleId,
-    date: Timestamp.fromDate(dateMidnight),
+    date: Timestamp.fromDate(day0(dateMidnight)),
+    dateKey: y,
     createdAt: serverTimestamp(),
-  });
+  }, { merge: true });
+  return ref.id;
 }
 
 export async function clearReservationsForProject(projectId) {
@@ -1234,6 +1249,93 @@ export async function fetchReservationsInRange(startTs, endTs) {
   const qy = query(col, where('date', '>=', startTs), where('date', '<=', endTs));
   const snap = await getDocs(qy);
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+// ── 新規：YYYY-MM-DD での範囲取得（dateKey優先 / 旧データはTimestampでフォロー）
+export async function fetchReservationsByYmdRange(startYmd, endYmd) {
+  const col = collection(db, 'vehicleReservations');
+  const map = new Map();
+  // 1) dateKey 範囲（TZ非依存）
+  const s1 = await getDocs(query(col, where('dateKey', '>=', startYmd), where('dateKey', '<=', endYmd)));
+  s1.docs.forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
+  // 2) フォールバック：Timestamp 範囲（古いDocでdateKeyが無い場合）
+  const startTs = Timestamp.fromDate(new Date(`${startYmd}T00:00:00`));
+  const endTs   = Timestamp.fromDate(new Date(`${endYmd}T23:59:59.999`));
+  const s2 = await getDocs(query(col, where('date', '>=', startTs), where('date', '<=', endTs)));
+  s2.docs.forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
+  return [...map.values()];
+}
+
+// ── 任意：一度だけ実行して既存予約に dateKey を埋めるユーティリティ
+export async function backfillReservationDateKeys() {
+  const snap = await getDocs(collection(db, 'vehicleReservations'));
+  const batch = writeBatch(db);
+  snap.docs.forEach(docSnap => {
+   const data = docSnap.data();
+    if (!data.dateKey && data.date) {
+      const dt = data.date?.toDate?.() ?? new Date(data.date);
+      batch.set(docSnap.ref, { dateKey: ymd(dt) }, { merge: true });
+    }
+  });
+  await batch.commit();
+}
+
+// ★ 追加：Txで vehiclePlan を保存（衝突があれば throw）
+//    - desired: vehiclePlan から (ymd, vehicleId) を抽出
+//    - Tx内で各 doc を get → 他プロジェクト所有なら衝突
+//    - 問題なければ set（merge）
+//    - その後、当該範囲で「自分が保持しているが今回外れた予約」をクリーンアップ
+export async function saveProjectVehiclePlan(projectId, vehiclePlan, datesInRange) {
+  // 1) 希望セットを作成
+  const desired = [];
+  for (const d of datesInRange || []) {
+    const y = ymd(d);
+    const sel = vehiclePlan?.[y] || {};
+    ['sales','cargo'].forEach(t => {
+      const vid = sel?.[t];
+      if (vid) desired.push({ ymd: y, vehicleId: vid });
+    });
+  }
+  // 2) Tx で衝突チェック & upsert
+  const refs = desired.map(p => doc(db, 'vehicleReservations', reservationId(p.ymd, p.vehicleId)));
+  await runTransaction(db, async (tx) => {
+    for (let i = 0; i < desired.length; i++) {
+      const want = desired[i];
+      const ref  = refs[i];
+      const snap = await tx.get(ref);
+      if (snap.exists()) {
+        const cur = snap.data();
+        if (cur.projectId && cur.projectId !== projectId) {
+          throw new Error(`CONFLICT ${want.ymd} vehicle=${want.vehicleId} reservedBy=${cur.projectId}`);
+        }
+      }
+      tx.set(ref, {
+        projectId,
+        vehicleId: want.vehicleId,
+        date: Timestamp.fromDate(new Date(`${want.ymd}T00:00:00`)),
+        dateKey: want.ymd,
+        createdAt: serverTimestamp(),
+      }, { merge: true });
+    }
+  });
+  // 3) 範囲内の自分の既存予約のうち「今回希望していないもの」を削除
+  if ((datesInRange || []).length) {
+    const s = datesInRange[0], e = datesInRange[datesInRange.length - 1];
+    const startTs = Timestamp.fromDate(day0(s));
+    const endTs   = Timestamp.fromDate(new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23,59,59,999));
+    const mine = await getDocs(query(
+      collection(db, 'vehicleReservations'),
+      where('projectId', '==', projectId),
+      where('date', '>=', startTs),
+      where('date', '<=', endTs)
+    ));
+    const keep = new Set(desired.map(p => reservationId(p.ymd, p.vehicleId)));
+    const batch = writeBatch(db);
+    mine.docs.forEach(d => {
+      if (!keep.has(d.id)) batch.delete(d.ref);
+    });
+    await batch.commit();
+  }
+  return true;
 }
 
 export async function fetchReservationsForProject(projectId) {
