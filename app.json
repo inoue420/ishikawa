@@ -2,7 +2,7 @@
   "expo": {
     "name": "ishikawa",
     "slug": "ishikawa",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "orientation": "default",
     "icon": "./assets/IKG_ICON.png",
     "userInterfaceStyle": "light",
