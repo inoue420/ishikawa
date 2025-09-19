@@ -49,6 +49,7 @@ const colorFromId = (id) => {
  const BAR_HEIGHT   = 18;  // バーの高さ
  const HEADER_SPACE = 72;  // 見出し(曜日名＋月名)ぶんの概算高さ
  const CAL_HEIGHT   = HEADER_SPACE + CELL_HEIGHT * 6 + 4; // 6週ぶんを確保
+ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export default function ScheduleScreen({ navigation }) {
   const { date, setDate } = useContext(DateContext);
@@ -100,101 +101,93 @@ export default function ScheduleScreen({ navigation }) {
   }, [visibleMonth]);
 
   /**
-   * 週内で lane（段）を固定し、日ごとに「その日の各段に何を描くか」を決める。
-   * dayLayout: {
-   *   'YYYY-MM-DD': {
-   *     lanes: [ {title, color, isStart, isEnd}, ...MAX_LANES ],
-   *     overflow: number // 5件目以降など
-   *   }, ...
-   * }
+   * 各「日」ごとにアクティブな予定を集め、優先度で上に詰める。
+   * 優先順位:
+   *   1) 複数日の予定（開始日が昔のものほど上）
+   *   2) 単日の予定（開始時間が早いものほど上）
+   * レイアウトは dayLayout['YYYY-MM-DD'] に集約。
    */
   const dayLayout = useMemo(() => {
     const layout = {};
-    const weekLane = new Map(); // weekKey(日曜) → Map(projectKey → lane)
-
     const ensureDay = (k) => {
       if (!layout[k]) layout[k] = { lanes: Array(MAX_LANES).fill(null), overflow: 0 };
       return layout[k];
     };
-    const getWeekKey = (d) => {
-      const dd = new Date(d); dd.setHours(0,0,0,0);
-      const dow = dd.getDay();         // 0:Sun
-      const sun = new Date(dd); sun.setDate(dd.getDate() - dow);
-      return toDateString(sun);
+
+    // dayKey -> その日に跨っているセグメント配列
+    const byDay = new Map(); // Map<string, Array<seg>>
+    const pushByDay = (k, seg) => {
+      if (!byDay.has(k)) byDay.set(k, []);
+      byDay.get(k).push(seg);
     };
 
+    // 1) 予定を日単位のセグメントへ展開し、各日に登録
     projects.forEach((p) => {
       const s0 = fromTimestampOrString(p.startDate);
       const e0 = fromTimestampOrString(p.endDate || p.startDate);
+      // 日単位に切り捨て
       const s = new Date(s0.getFullYear(), s0.getMonth(), s0.getDate());
       const e = new Date(e0.getFullYear(), e0.getMonth(), e0.getDate());
 
+      const isMulti = (e - s) >= DAY_MS;              // 複数日判定
+      const startMs = s0.getTime();                   // 並べ替えキー（開始日時）
       const projectKey = String(p.id ?? p.title ?? '');
       const title = String(p.title ?? p.name ?? p.id ?? '（無題）');
       const color = colorFromId(projectKey);
 
-      let cur = new Date(s);
-      while (cur <= e) {
-        const wk = getWeekKey(cur);
-        if (!weekLane.has(wk)) weekLane.set(wk, new Map());
-        const laneMap = weekLane.get(wk);
-
-        // 週内 lane をプロジェクトごとに固定
-        let lane = laneMap.get(projectKey);
-        if (lane == null) {
-          const used = new Set(laneMap.values());
-          // 空いてる段（0..MAX_LANES-1）を探す
-          let found = -1;
-          for (let i = 0; i < MAX_LANES; i++) if (!used.has(i)) { found = i; break; }
-          if (found === -1) found = MAX_LANES - 1; // あふれたら一旦最終段候補（当日埋まってたら overflow）
-          lane = found;
-          laneMap.set(projectKey, lane);
-        }
-
-        // 週内セグメント（Sun〜Sat）
-        const weekStart = new Date(getWeekKey(cur));
-        const weekEnd   = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6);
-        const segStart  = new Date(Math.max(cur, s));
-        const segEnd    = new Date(Math.min(weekEnd, e));
-
-        // セグメント長（週内での連続区間）と中央インデックス
-        const segLen = Math.round((segEnd - segStart) / 86400000) + 1;
-        const midIdx = Math.floor((segLen - 1) / 2);
-        // セグメント上の各日へ配置
-        let d = new Date(segStart);
-        let idx = 0;
-        while (d <= segEnd) {
-          const k = toDateString(d);
-          const day = ensureDay(k);
-
-          // laneが空いていなければ次の空きへ、なければoverflow
-          let targetLane = lane;
-          while (targetLane < MAX_LANES && day.lanes[targetLane]) targetLane++;
-          if (targetLane >= MAX_LANES) {
-            day.overflow += 1;
-          } else {
-            const isStart = (k === toDateString(segStart));
-            const isEnd   = (k === toDateString(segEnd));
-            day.lanes[targetLane] = {
-              title,
-              color,
-              isStart,
-              isEnd,
-              showLabel: idx === midIdx, // ← 週内セグメントの中央日だけラベル表示
-              segLen,                    // セグメント長（週内）
-              midIdx,                    // 中央位置（0始まり）
-            };
-          }
-
-          d.setDate(d.getDate() + 1);
-          idx += 1;
-        }
-
-        // 次の週へ
-        const next = new Date(weekEnd); next.setDate(weekEnd.getDate() + 1);
-        cur = next;
+      // 週固定はやめ、セグメント全期間をその日ごとに登録
+      const segLen = Math.round((e - s) / DAY_MS) + 1;
+      const midIdx = Math.floor((segLen - 1) / 2);
+      let d = new Date(s);
+      let idx = 0;
+      while (d <= e) {
+        const k = toDateString(d);
+        pushByDay(k, {
+          projectKey, title, color,
+          segStart: s, segEnd: e, segLen, midIdx,
+          isMulti, startMs, dayIdx: idx,
+        });
+        d.setDate(d.getDate() + 1);
+        idx += 1;
       }
     });
+
+    // 2) 各日で優先度ソート → 上から lane に詰める
+    for (const [k, segs] of byDay.entries()) {
+      // 複数日を最優先（true=0, false=1）→ 開始日時古い順 → タイトル/キー
+      segs.sort((a, b) => {
+        const ap = a.isMulti ? 0 : 1;
+        const bp = b.isMulti ? 0 : 1;
+        if (ap !== bp) return ap - bp;
+        if (a.startMs !== b.startMs) return a.startMs - b.startMs;
+        if (a.title !== b.title) return a.title.localeCompare(b.title);
+        return a.projectKey.localeCompare(b.projectKey);
+      });
+
+      const info = ensureDay(k);
+      let used = 0;
+      for (let i = 0; i < segs.length; i++) {
+        const seg = segs[i];
+        if (used >= MAX_LANES) {
+          info.overflow += 1;
+          continue;
+        }
+        // この日の表示情報
+        const isStart = k === toDateString(seg.segStart);
+        const isEnd   = k === toDateString(seg.segEnd);
+        const showLabel = (seg.dayIdx === seg.midIdx); // 中央日のみラベル
+        info.lanes[used] = {
+          title: seg.title,
+          color: seg.color,
+          isStart,
+          isEnd,
+          showLabel,
+          segLen: seg.segLen,
+          midIdx: seg.midIdx,
+        };
+        used += 1;
+      }
+    }
 
     return layout;
   }, [projects]);
