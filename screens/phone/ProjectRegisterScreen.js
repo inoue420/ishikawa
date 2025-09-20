@@ -26,6 +26,11 @@ import {
   fetchReservationsForProject,
   setVehicleReservation,
   clearReservationsForProject,
+  // ▼ 参加従業員（1日×1人）API
+  fetchAssignmentsInRange,
+  fetchAssignmentsForProject,
+  setEmployeeAssignment,
+  clearAssignmentsForProject,  
 } from '../../firestoreService';
 import { Timestamp } from 'firebase/firestore';
 
@@ -157,13 +162,24 @@ export default function ProjectRegisterScreen({ route }) {
   const [survey, setSurvey] = useState(PH);
   const [design, setDesign] = useState(PH);
   const [management, setManagement] = useState(PH);
-  const [participants, setParticipants] = useState([]);
-
-  const toggleParticipant = useCallback((empId) => {
-    setParticipants(prev =>
-      prev.includes(empId) ? prev.filter(id => id !== empId) : [...prev, empId]
-    );
-  }, []);
+  // 日毎の参加者選択 { 'YYYY-MM-DD': Set<employeeId> }
+  const [participantSelectionsByDay, setParticipantSelectionsByDay] = useState({});
+  // 使用不可マップ { 'YYYY-MM-DD': Set<employeeId> }
+  const [unavailableEmpMap, setUnavailableEmpMap] = useState({});
+  const [empAvailLoading, setEmpAvailLoading] = useState(false);
+  const employeesById = useMemo(
+    () => Object.fromEntries((employees || []).map(e => [e.id, e])),
+    [employees]
+  );
+  // コスト算出等のため「全日合算の参加者」ユニオン配列を作る
+  const participants = useMemo(() => {
+    const s = new Set();
+    Object.values(participantSelectionsByDay || {}).forEach(v => {
+      const arr = Array.isArray(v) ? v : Array.from(v || []);
+      arr.forEach(id => s.add(id));
+    });
+    return Array.from(s);
+  }, [participantSelectionsByDay]);
   // 役員・部長のみを担当候補にする（従業員は除外）
   const managerCandidates = useMemo(() => {
     return (employees || []).filter(e => {
@@ -227,6 +243,87 @@ export default function ProjectRegisterScreen({ route }) {
     }
     return arr;
   }, [startDate, endDate]);
+  // 期間の「参加者」空き状況（他案件割当との時間帯オーバーラップ）
+  useEffect(() => {
+    (async () => {
+      if (datesInRange.length === 0) {
+        setUnavailableEmpMap({});
+        setParticipantSelectionsByDay({});
+        return;
+      }
+      setEmpAvailLoading(true);
+      const s = datesInRange[0];
+      const e = datesInRange[datesInRange.length - 1];
+      const startTs = Timestamp.fromDate(new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0,0,0,0));
+      const endTs   = Timestamp.fromDate(new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23,59,59,999));
+
+      const [assignments] = await Promise.all([
+        fetchAssignmentsInRange(startTs, endTs),
+      ]);
+      const overlappedProjects = await fetchProjectsOverlappingRange(
+        new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0,0,0,0),
+        new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23,59,59,999)
+      );
+      const projMap = Object.fromEntries((overlappedProjects || []).map(p => [p.id, p]));
+
+      const map = {};
+      datesInRange.forEach(d => { map[toYmd(d)] = new Set(); });
+
+      const dayWindow = (d) => {
+        const sd = startDate, ed = endDate;
+        const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0);
+        const dayEnd   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23,59,59,999);
+        const clampStart =
+          (sd <= dayStart && ed >= dayEnd) ? dayStart :
+          (toYmd(sd) === toYmd(d)) ? sd : dayStart;
+        const clampEnd =
+          (sd <= dayStart && ed >= dayEnd) ? dayEnd :
+          (toYmd(ed) === toYmd(d)) ? ed : dayEnd;
+        return [clampStart, clampEnd];
+      };
+      const overlaps = (a1, a2, b1, b2) => a1 < b2 && b1 < a2;
+
+      for (const a of assignments) {
+        if (editingProjectId && a.projectId === editingProjectId) continue;
+        const other = projMap[a.projectId];
+        if (!other) continue;
+        const oS = other.startDate?.toDate?.() ?? new Date(other.startDate);
+        const oE = other.endDate?.toDate?.() ?? new Date(other.endDate || other.startDate);
+        const dy = a.dateKey || toYmd(a.date?.toDate?.() ?? new Date(a.date));
+        const d  = new Date(dy);
+        if (!map[dy]) continue;
+        const [meS, meE] = dayWindow(d);
+        const oDayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0);
+        const oDayEnd   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23,59,59,999);
+        const oClampS =
+          (oS <= oDayStart && oE >= oDayEnd) ? oDayStart :
+          (toYmd(oS) === dy) ? oS : oDayStart;
+        const oClampE =
+          (oS <= oDayStart && oE >= oDayEnd) ? oDayEnd :
+          (toYmd(oE) === dy) ? oE : oDayEnd;
+        if (overlaps(meS, meE, oClampS, oClampE)) {
+          map[dy].add(a.employeeId);
+        }
+      }
+      setUnavailableEmpMap(map);
+
+      // 編集時は自案件の既存割当てをプリフィル
+      if (editingProjectId) {
+        const mine = await fetchAssignmentsForProject(editingProjectId);
+        const next = {};
+        for (const r of mine) {
+          const dy = r.dateKey || toYmd(r.date?.toDate?.() ?? new Date(r.date));
+          const set = new Set(next[dy] || []);
+          set.add(r.employeeId);
+          next[dy] = set;
+        }
+        setParticipantSelectionsByDay(next);
+      } else {
+        setParticipantSelectionsByDay({});
+      }
+      setEmpAvailLoading(false);
+    })();
+  }, [startDate.getTime(), endDate.getTime(), editingProjectId]);
 
   // 期間の空き状況（既予約・車検/修理）を算出
   useEffect(() => {
@@ -382,7 +479,14 @@ export default function ProjectRegisterScreen({ route }) {
     setSurvey(src.survey ?? PH);
     setDesign(src.design ?? PH);
     setManagement(src.management ?? PH);
-    setParticipants(Array.isArray(src.participants) ? src.participants : []);
+    // participantPlan が来ていれば日毎選択に展開
+    if (src.participantPlan && typeof src.participantPlan === 'object') {
+      const next = {};
+      Object.entries(src.participantPlan).forEach(([dy, arr]) => {
+        next[dy] = new Set(arr || []);
+      });
+      setParticipantSelectionsByDay(next);
+    }
   }, []);  
 
   // ─────────────────────────────────────────────
@@ -456,6 +560,16 @@ useEffect(() => {
      if (salesId || cargoId) vehiclePlan[ymd] = { sales: salesId, cargo: cargoId };
    }
     const hasAnySelection = Object.keys(vehiclePlan).length > 0;    
+
+    // 参加者（日毎）
+    const participantPlan = {};
+    for (const d of datesInRange) {
+      const y = toYmd(d);
+      const set = participantSelectionsByDay[y];
+      const arr = Array.isArray(set) ? set : Array.from(set || []);
+      if (arr.length) participantPlan[y] = arr;
+    }
+    const hasAnyParticipants = Object.keys(participantPlan).length > 0;
     const payload = {
       name: name.trim(),
       clientName: clientName.trim(),
@@ -477,6 +591,7 @@ useEffect(() => {
       laborCost,
       rentalResourceCost,
       ...(hasAnySelection ? { vehiclePlan } : {}),
+      ...(hasAnyParticipants ? { participantPlan } : {}),
 
     };
 
@@ -507,6 +622,7 @@ useEffect(() => {
         // ← 編集：上書き更新
         await setProject(editingProjectId, payload, actor);
         await clearReservationsForProject(editingProjectId);
+        await clearAssignmentsForProject(editingProjectId);
         for (const d of datesInRange) {
           const ymd = toYmd(d);
           const sel = vehicleSelections[ymd] || {};
@@ -517,6 +633,16 @@ useEffect(() => {
               editingProjectId,
               new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0),
               vid
+            );
+          }
+          // 参加者の保存
+          const set = participantSelectionsByDay[ymd];
+          const arr = Array.isArray(set) ? set : Array.from(set || []);
+          for (const empId of arr) {
+            await setEmployeeAssignment(
+              editingProjectId,
+              new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0),
+              empId
             );
           }
         }
@@ -539,13 +665,22 @@ useEffect(() => {
               vid
             );
           }
+          const set = participantSelectionsByDay[ymd];
+          const arr = Array.isArray(set) ? set : Array.from(set || []);
+          for (const empId of arr) {
+            await setEmployeeAssignment(
+              newProjectId,
+              new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0),
+              empId
+            );
+          }
         }
         // クリア
         setName('');
         setClientName('');
         setStartDate(roundToHour(new Date()));
         setEndDate(roundToHour(new Date()));
-        setParticipants([]);
+        setParticipantSelectionsByDay({});
         setOrderAmount('');
         setTravelCost('');
         setMiscExpense('');
@@ -695,22 +830,6 @@ useEffect(() => {
           </Picker>
         </View>
 
-        {/* 参加従業員（複数選択） */}
-        <Text style={tw`mt-2`}>参加従業員</Text>
-        <Text style={tw`mb-1`}>選択中: {participants.length}名</Text>
-        {employees.map((emp) => {
-          const checked = participants.includes(emp.id);
-          return (
-            <TouchableOpacity
-              key={emp.id}
-              onPress={() => toggleParticipant(emp.id)}
-              style={tw`bg-white border border-gray-300 rounded p-2 mb-2`}
-              activeOpacity={0.7}
-            >
-              <Text>{checked ? '☑ ' : '☐ '}{emp.name}</Text>
-            </TouchableOpacity>
-          );
-        })}
 
         {/* 日付・時刻 */}
         <Text>開始予定日</Text>
@@ -815,6 +934,56 @@ useEffect(() => {
             }}
           />
         )}
+
+        {/* ===== 参加従業員（開始〜終了の各日） ===== */}
+        <Text style={tw`text-lg font-bold mt-4 mb-2`}>参加従業員（各日）</Text>
+        {datesInRange.length === 0 && <Text>日付範囲を設定してください。</Text>}
+        {datesInRange.map((d) => {
+          const y = toYmd(d);
+          const blocked = unavailableEmpMap[y] || new Set();
+          const cur = participantSelectionsByDay[y] || new Set();
+          const onToggle = (empId) => {
+            if (empAvailLoading) return;
+            if (blocked.has(empId)) {
+              Alert.alert('選択不可', 'この日は他プロジェクトで割当済みの従業員です');
+              return;
+            }
+            setParticipantSelectionsByDay(prev => {
+              const s = new Set(Array.from(prev[y] || []));
+              if (s.has(empId)) s.delete(empId); else s.add(empId);
+              return { ...prev, [y]: s };
+            });
+          };
+          return (
+            <View key={y} style={tw`mb-4 p-2 border rounded`}>
+              <Text style={tw`font-bold mb-2`}>{d.toLocaleDateString()}</Text>
+              <View style={tw`flex-row flex-wrap -mx-1`}>
+                {employees.map(emp => {
+                  const isSel = cur.has?.(emp.id) || cur.includes?.(emp.id);
+                  const isBlocked = blocked.has(emp.id);
+                  return (
+                    <TouchableOpacity
+                      key={emp.id}
+                      disabled={isBlocked || empAvailLoading}
+                      onPress={() => onToggle(emp.id)}
+                      activeOpacity={0.7}
+                      style={tw.style(
+                        'm-1 px-3 py-2 rounded border',
+                        isBlocked
+                          ? 'bg-gray-200 border-gray-300 opacity-50'
+                          : (empAvailLoading
+                              ? 'bg-gray-100 border-gray-300 opacity-60'
+                              : (isSel ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'))
+                      )}
+                    >
+                      <Text>{(isSel ? '☑ ' : '☐ ') + (emp.name || '—')}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          );
+        })}
 
         {/* ===== 車両選択（開始〜終了の各日：営業車／積載車） ===== */}
         <Text style={tw`text-lg font-bold mt-4 mb-2`}>車両選択</Text>

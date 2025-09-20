@@ -160,6 +160,9 @@ export async function addUser(userData) {
  *       sales: string|null,     // 営業車 vehicleId
  *       cargo: string|null,     // 積載車 vehicleId
  *     }
+ *   }
+ *   participantPlan: {          // 日毎の参加従業員（任意）
+ *     [date: string]: string[]  // 従業員IDの配列
  *   } 
  */
 
@@ -1343,4 +1346,118 @@ export async function fetchReservationsForProject(projectId) {
   const qy = query(col, where('projectId', '==', projectId));
   const snap = await getDocs(qy);
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+// ========= Employee assignments (per-day) =========
+// docId: `${YYYY-MM-DD}_${employeeId}`
+const empDayId = (ymdStr, employeeId) => `${ymdStr}_${employeeId}`;
+
+export async function setEmployeeAssignment(projectId, dateMidnight, employeeId) {
+  const y = ymd(dateMidnight);
+  const ref = doc(db, 'employeeAssignments', empDayId(y, employeeId));
+  await setDoc(ref, {
+    projectId,
+    employeeId,
+    date: Timestamp.fromDate(day0(dateMidnight)),
+    dateKey: y,
+    createdAt: serverTimestamp(),
+  }, { merge: true });
+  return ref.id;
+}
+
+export async function clearAssignmentsForProject(projectId) {
+  const colRef = collection(db, 'employeeAssignments');
+  const qy = query(colRef, where('projectId', '==', projectId));
+  const snap = await getDocs(qy);
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+export async function fetchAssignmentsInRange(startTs, endTs) {
+  const colRef = collection(db, 'employeeAssignments');
+  const qy = query(colRef, where('date', '>=', startTs), where('date', '<=', endTs));
+  const snap = await getDocs(qy);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function fetchAssignmentsByYmdRange(startYmd, endYmd) {
+  const colRef = collection(db, 'employeeAssignments');
+  const map = new Map();
+  const s1 = await getDocs(query(colRef, where('dateKey', '>=', startYmd), where('dateKey', '<=', endYmd)));
+  s1.docs.forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
+  const startTs = Timestamp.fromDate(new Date(`${startYmd}T00:00:00`));
+  const endTs   = Timestamp.fromDate(new Date(`${endYmd}T23:59:59.999`));
+  const s2 = await getDocs(query(colRef, where('date', '>=', startTs), where('date', '<=', endTs)));
+  s2.docs.forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
+  return [...map.values()];
+}
+
+export async function fetchAssignmentsForProject(projectId) {
+  const colRef = collection(db, 'employeeAssignments');
+  const qy = query(colRef, where('projectId', '==', projectId));
+  const snap = await getDocs(qy);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+// Txで participantPlan を保存（衝突があれば throw）
+export async function saveProjectParticipantPlan(projectId, participantPlan, datesInRange) {
+  const desired = [];
+  for (const d of datesInRange || []) {
+    const y = ymd(d);
+    const ids = participantPlan?.[y] || [];
+    ids.forEach(empId => desired.push({ ymd: y, employeeId: empId }));
+  }
+  const refs = desired.map(p => doc(db, 'employeeAssignments', empDayId(p.ymd, p.employeeId)));
+  await runTransaction(db, async (tx) => {
+    for (let i = 0; i < desired.length; i++) {
+      const want = desired[i];
+      const ref  = refs[i];
+      const snap = await tx.get(ref);
+      if (snap.exists()) {
+        const cur = snap.data();
+        if (cur.projectId && cur.projectId !== projectId) {
+          throw new Error(`CONFLICT ${want.ymd} employee=${want.employeeId} reservedBy=${cur.projectId}`);
+        }
+      }
+      tx.set(ref, {
+        projectId,
+        employeeId: want.employeeId,
+        date: Timestamp.fromDate(new Date(`${want.ymd}T00:00:00`)),
+        dateKey: want.ymd,
+        createdAt: serverTimestamp(),
+      }, { merge: true });
+    }
+  });
+  // 期間内の「今回希望していない自分の割当て」をクリーンアップ
+  if ((datesInRange || []).length) {
+    const s = datesInRange[0], e = datesInRange[datesInRange.length - 1];
+    const startTs = Timestamp.fromDate(day0(s));
+    const endTs   = Timestamp.fromDate(new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23,59,59,999));
+    const mine = await getDocs(query(
+      collection(db, 'employeeAssignments'),
+      where('projectId', '==', projectId),
+      where('date', '>=', startTs),
+      where('date', '<=', endTs)
+    ));
+    const keep = new Set(desired.map(p => empDayId(p.ymd, p.employeeId)));
+    const batch = writeBatch(db);
+    mine.docs.forEach(d => { if (!keep.has(d.id)) batch.delete(d.ref); });
+    await batch.commit();
+  }
+  return true;
+}
+
+// 既存Docに dateKey を埋める任意ユーティリティ
+export async function backfillAssignmentDateKeys() {
+  const snap = await getDocs(collection(db, 'employeeAssignments'));
+  const batch = writeBatch(db);
+  snap.docs.forEach(docSnap => {
+    const data = docSnap.data();
+    if (!data.dateKey && data.date) {
+      const dt = data.date?.toDate?.() ?? new Date(data.date);
+      batch.set(docSnap.ref, { dateKey: ymd(dt) }, { merge: true });
+    }
+  });
+  await batch.commit();
 }

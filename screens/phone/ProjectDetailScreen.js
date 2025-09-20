@@ -41,6 +41,10 @@ import {
   fetchReservationsByYmdRange,
   fetchReservationsForProject,
   saveProjectVehiclePlan,
+  fetchAssignmentsByYmdRange,
+  fetchAssignmentsForProject,
+  saveProjectParticipantPlan,
+  setEmployeeAssignment,
 } from '../../firestoreService';
 import { Timestamp } from 'firebase/firestore';
 
@@ -126,6 +130,9 @@ export default function ProjectDetailScreen({ route }) {
   const [vehicleSelections, setVehicleSelections] = useState({}); // { 'YYYY-MM-DD': { sales?: id, cargo?: id } }
   const [unavailableMap, setUnavailableMap] = useState({});       // { 'YYYY-MM-DD': Set(vehicleId) }
   const [availLoading, setAvailLoading] = useState(false); 
+  const [participantSelections, setParticipantSelections] = useState({}); // { 'YYYY-MM-DD': Set<empId> }
+  const [unavailableEmpMap, setUnavailableEmpMap] = useState({});         // { 'YYYY-MM-DD': Set<empId> }
+  const [empAvailLoading, setEmpAvailLoading] = useState(false);
 
   // プロジェクトの開始/終了（Date）→ 期間配列
   const projStart = useMemo(() => toDateMaybe(project?.startDate), [project?.startDate]);
@@ -243,6 +250,14 @@ export default function ProjectDetailScreen({ route }) {
       setVehicleSelections(project.vehiclePlan);
     }
   }, [project?.vehiclePlan]);
+  // 参加者：保存済みがあればプリフィル
+  useEffect(() => {
+    if (project?.participantPlan && Object.keys(project.participantPlan).length) {
+      const next = {};
+      Object.entries(project.participantPlan).forEach(([dy, arr]) => next[dy] = new Set(arr || []));
+      setParticipantSelections(next);
+    }
+  }, [project?.participantPlan]);
 
   // 期間の空き状況（“同じ日なら不可”）
   useEffect(() => {
@@ -312,6 +327,49 @@ export default function ProjectDetailScreen({ route }) {
     })();
     return () => { cancelled = true; };
   }, [projStart?.getTime(), projEnd?.getTime(), projectId, project?.vehiclePlan, vehiclesById]);
+  // 参加者の空き状況（同じ日・他案件割当は不可）
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (datesInRange.length === 0) {
+        setUnavailableEmpMap({});
+        setParticipantSelections(project?.participantPlan || {});
+        return;
+      }
+      setEmpAvailLoading(true);
+      const s = datesInRange[0], e = datesInRange[datesInRange.length - 1];
+      const startKey = toYmd(s), endKey = toYmd(e);
+      try {
+        const assignments = await fetchAssignmentsByYmdRange(startKey, endKey);
+        const map = {};
+        datesInRange.forEach(d => { map[toYmd(d)] = new Set(); });
+        for (const a of assignments) {
+          if (a.projectId === projectId) continue;
+          const dy = a.dateKey || toYmd(a.date?.toDate?.() ?? new Date(a.date));
+          if (map[dy]) map[dy].add(a.employeeId);
+        }
+        if (!cancelled) setUnavailableEmpMap(map);
+        // プリフィル：保存済みがなければ自案件割当を推定
+        if (!(project?.participantPlan && Object.keys(project.participantPlan).length)) {
+          const mine = await fetchAssignmentsForProject(projectId);
+          const next = {};
+          for (const r of mine) {
+            const dy = r.dateKey || toYmd(r.date?.toDate?.() ?? new Date(r.date));
+            const set = new Set(next[dy] || []);
+            set.add(r.employeeId);
+            next[dy] = set;
+          }
+          if (!cancelled) setParticipantSelections(next);
+        }
+      } catch (e) {
+        console.log('[participants availability] error', e);
+      } finally {
+        if (!cancelled) setEmpAvailLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [projStart?.getTime(), projEnd?.getTime(), projectId, project?.participantPlan]);
+
   // 状態が変わったら都度ダンプ
   useEffect(() => {
     console.log('[vehicles][debug] unavailableMap(state)', setMapToPlainObject(unavailableMap));
@@ -485,6 +543,29 @@ export default function ProjectDetailScreen({ route }) {
     }
   };
 
+  const handleSaveParticipants = async () => {
+    try {
+      const { by, byName } = await resolveCurrentUser();
+      const plan = {};
+      Object.entries(participantSelections || {}).forEach(([dy, set]) => {
+        const arr = Array.isArray(set) ? set : Array.from(set || []);
+        if (arr.length) plan[dy] = arr;
+      });
+      await saveProjectParticipantPlan(projectId, plan, datesInRange);
+      // projects にもキャッシュ保存（一覧等で使う）
+      const union = Array.from(new Set(Object.values(plan).flat()));
+      await upsertProject(projectId, { participantPlan: plan, participants: union }, { by, byName });
+      Alert.alert('保存しました', '参加従業員の割当てを更新しました。');
+      setProject(p => ({ ...(p || {}), participantPlan: plan, participants: union }));
+    } catch (e) {
+      const msg = String(e?.message || e);
+      if (msg.startsWith('CONFLICT')) {
+        Alert.alert('参加者の競合', '他のプロジェクトが同じ日に同じ従業員を割当済みです。\n別の従業員を選択してください。');
+      } else {
+        Alert.alert('保存に失敗しました');
+      }
+    }
+  }; 
 
   // 追加：右上メニュー（編集・コピー・削除）
   const openActionMenu = useCallback(() => {
@@ -647,7 +728,75 @@ export default function ProjectDetailScreen({ route }) {
         </Text>
 
         {/* ===== 車両（参加従業員の下） ===== */}
+        {/* 参加従業員（各日） */}
         <View style={tw`mt-5`}>
+          <Text style={tw`text-lg font-bold`}>参加従業員</Text>
+          {datesInRange.length === 0 ? (
+            <Text style={tw`mt-2`}>開始日・終了日の設定が必要です。</Text>
+          ) : (
+            datesInRange.map((d) => {
+              const y = toYmd(d);
+              const blocked = unavailableEmpMap[y] || new Set();
+              const cur = participantSelections[y] || new Set();
+              const onToggle = (empId) => {
+                if (empAvailLoading) return;
+                if (blocked.has(empId)) {
+                  Alert.alert('選択不可', 'この日は他プロジェクトで割当済みの従業員です');
+                  return;
+                }
+                setParticipantSelections(prev => {
+                  const s = new Set(Array.from(prev[y] || []));
+                  if (s.has(empId)) s.delete(empId); else s.add(empId);
+                  return { ...prev, [y]: s };
+                });
+              };
+              return (
+                <View key={y} style={tw`mt-3 p-3 border rounded`}>
+                  <Text style={tw`font-bold mb-2`}>{d.toLocaleDateString()}</Text>
+                  <View style={tw`flex-row flex-wrap -mx-1`}>
+                    {employees.map(emp => {
+                      const isSel = cur.has?.(emp.id) || cur.includes?.(emp.id);
+                      const isBlocked = blocked.has(emp.id);
+                      return (
+                        <TouchableOpacity
+                          key={emp.id}
+                          disabled={isBlocked || empAvailLoading}
+                          onPress={() => onToggle(emp.id)}
+                          activeOpacity={0.7}
+                          style={tw.style(
+                            'm-1 px-3 py-2 rounded border',
+                            isBlocked
+                              ? 'bg-gray-200 border-gray-300 opacity-50'
+                              : (empAvailLoading
+                                  ? 'bg-gray-100 border-gray-300 opacity-60'
+                                  : (isSel ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'))
+                          )}
+                        >
+                          <Text>{(isSel ? '☑ ' : '☐ ') + (emp.name || '—')}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              );
+            })
+          )}
+          <View style={tw`mt-3`}>
+            <TouchableOpacity
+              onPress={handleSaveParticipants}
+              disabled={empAvailLoading}
+              activeOpacity={0.7}
+              style={tw.style('rounded p-3 items-center', empAvailLoading ? 'bg-blue-300' : 'bg-blue-600')}
+            >
+              <Text style={tw`text-white font-bold`}>
+                {empAvailLoading ? '判定中…' : '参加従業員を保存'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* ===== 車両 ===== */}
+        <View style={tw`mt-6`}>
           <Text style={tw`text-lg font-bold`}>車両</Text>
           {datesInRange.length === 0 ? (
             <Text style={tw`mt-2`}>開始日・終了日の設定が必要です。</Text>
