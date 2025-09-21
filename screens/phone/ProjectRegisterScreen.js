@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import tw from 'twrnc';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import {
   fetchProjects,
   setProject,
@@ -585,6 +586,25 @@ useEffect(() => {
     is24Hour: true,
   };
 
+
+  // ── ピルUI（タップすると picker を出す） ──
+  const Pill = React.memo(function Pill({ label, onPress, mr = true }) {
+    return (
+      <TouchableOpacity
+        onPress={onPress}
+        activeOpacity={0.7}
+        style={tw.style(
+          'flex-1 rounded-full px-4 py-3 border items-center justify-center',
+          'bg-gray-100 border-gray-300',
+          mr && 'mr-2'
+        )}
+      >
+        {/* タップ要素の中身は必ず<Text>で包む */}
+        <Text style={tw`text-base`}>{label}</Text>
+      </TouchableOpacity>
+    );
+  });
+
   const handleSubmit = async () => {
     // 担当の未選択チェック
     // 役割バリデーション：ID選択 or その他テキスト必須
@@ -986,99 +1006,90 @@ useEffect(() => {
         })()}
 
 
-        {/* 日付・時刻 */}
-        <Text>開始予定日</Text>
-        <TouchableOpacity
-          onPress={() => setShowStartPicker(true)}
-          activeOpacity={0.7}
-          style={tw`border p-2 mb-2 rounded`}
-        >
-          <Text>{startDate.toLocaleDateString()}</Text>
-        </TouchableOpacity>
-        {showStartPicker && (
+        {/* ===== 日付・時刻（画像風UI） ===== */}
+        {/* 開始 行：日付ピル／時刻ピル */}
+        <View style={tw`mb-3`}>
+          <Text style={tw`mb-1`}>開始</Text>
+          <View style={tw`flex-row`}>
+            <Pill label={startDate.toLocaleDateString()} onPress={() => setShowStartPicker(true)} />
+            <Pill label={fmtTime(startDate)} onPress={() => setShowStartTimePicker(true)} mr={false} />
+          </View>
+        </View>
+        {/* Picker（開始：日付 = 月カレンダー） */}
+        <DateTimePickerModal
+          isVisible={showStartPicker}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'inline' : 'calendar'}
+          date={startDate}
+          locale="ja"
+          confirmTextIOS="決定"
+          cancelTextIOS="キャンセル"
+          onConfirm={(d) => {
+            setShowStartPicker(false);
+            if (d) {
+              const merged = new Date(d);
+              merged.setHours(startDate.getHours(), 0, 0, 0);
+              setStartDate(merged);
+              if (dateOnly(endDate) < dateOnly(merged)) {
+                setEndDate(new Date(merged));
+              }
+            }
+          }}
+          onCancel={() => setShowStartPicker(false)}
+        />
+        {/* Picker（開始：時刻） */}
+        {showStartTimePicker && (
           <DateTimePicker
-            mode="date"
-            display={Platform.OS === 'ios' ? 'spinner' : 'calendar'}
+            {...timePickerProps}
             value={startDate}
-            onChange={(_e, d) => {
-              setShowStartPicker(false);
-              if (d) {
-                const merged = new Date(d);
-                merged.setHours(startDate.getHours(), 0, 0, 0);
-                setStartDate(merged);
-                // 終了日が開始日より前なら引き上げる
-                if (dateOnly(endDate) < dateOnly(merged)) {
-                  setEndDate(new Date(merged)); // 同日・同時刻に合わせる
+            locale={Platform.OS === 'ios' ? 'ja-JP' : undefined}
+            onChange={(e, t) => {
+              setShowStartTimePicker(false);
+              if (t) {
+                const d = new Date(startDate);
+                d.setHours(t.getHours(), t.getMinutes(), 0, 0);
+                setStartDate(d);
+                if (toYmd(endDate) === toYmd(d) && endDate < d) {
+                  setEndDate(new Date(d));
                 }
               }
             }}
           />
         )}
 
-        <Text>開始予定時刻</Text>
-        <TouchableOpacity
-          onPress={() => setShowStartTimePicker(true)}
-          style={tw`border p-2 mb-2 rounded`}
-          activeOpacity={0.7}
-        >
-          <Text>{fmtTime(startDate)}</Text>
-        </TouchableOpacity>
-        {showStartTimePicker && (
-          <DateTimePicker
-            {...timePickerProps}
-            value={startDate}
-            onChange={(e, t) => {
-              // Android: e.type === 'dismissed' or 'set'
-              setShowStartTimePicker(false);
-              if (t) {
-                const d = new Date(startDate);
-                d.setHours(t.getHours(), t.getMinutes(), 0, 0);
-                setStartDate(d);
-              // 同じ日で終了時刻が開始より前なら引き上げる
-              if (toYmd(endDate) === toYmd(d) && endDate < d) {
-                setEndDate(new Date(d));
-              }
-              }
-            }}
-          />
-        )}
-
-        <Text>終了予定日</Text>
-        <TouchableOpacity
-          onPress={() => setShowEndPicker(true)}
-          activeOpacity={0.7}
-          style={tw`border p-2 mb-2 rounded`}
-        >
-          <Text>{endDate.toLocaleDateString()}</Text>
-        </TouchableOpacity>
-        {showEndPicker && (
-          <DateTimePicker
-            mode="date"
-            display={Platform.OS === 'ios' ? 'spinner' : 'calendar'}
-            value={endDate}
-            onChange={(_e, d) => {
-              setShowEndPicker(false);
-              if (d) {
-                const merged = new Date(d);
-                merged.setHours(endDate.getHours(), 0, 0, 0);
-                setEndDate(dateOnly(merged) < dateOnly(startDate) ? new Date(startDate) : merged);
-              }
-            }}
-          />
-        )}
-
-        <Text>終了予定時刻</Text>
-        <TouchableOpacity
-          onPress={() => setShowEndTimePicker(true)}
-          style={tw`border p-2 mb-2 rounded`}
-          activeOpacity={0.7}
-        >
-          <Text>{fmtTime(endDate)}</Text>
-        </TouchableOpacity>
+        {/* 終了 行：日付ピル／時刻ピル */}
+        <View style={tw`mb-3`}>
+          <Text style={tw`mb-1`}>終了</Text>
+          <View style={tw`flex-row`}>
+            <Pill label={endDate.toLocaleDateString()} onPress={() => setShowEndPicker(true)} />
+            <Pill label={fmtTime(endDate)} onPress={() => setShowEndTimePicker(true)} mr={false} />
+          </View>
+        </View>
+        {/* Picker（終了：日付 = 月カレンダー） */}
+        <DateTimePickerModal
+          isVisible={showEndPicker}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'inline' : 'calendar'}
+          date={endDate}
+          locale="ja"
+          confirmTextIOS="決定"
+          cancelTextIOS="キャンセル"
+          onConfirm={(d) => {
+            setShowEndPicker(false);
+            if (d) {
+              const merged = new Date(d);
+              merged.setHours(endDate.getHours(), 0, 0, 0);
+              setEndDate(dateOnly(merged) < dateOnly(startDate) ? new Date(startDate) : merged);
+            }
+          }}
+          onCancel={() => setShowEndPicker(false)}
+        />
+        {/* Picker（終了：時刻） */}
         {showEndTimePicker && (
           <DateTimePicker
             {...timePickerProps}
             value={endDate}
+            locale={Platform.OS === 'ios' ? 'ja-JP' : undefined}
             onChange={(e, t) => {
               setShowEndTimePicker(false);
               if (t) {
