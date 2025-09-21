@@ -116,6 +116,16 @@ const calcWorkHours = (start, end) => {
 const PH = '__placeholder__';
 
 export default function ProjectRegisterScreen({ route }) {
+  // ===== 場所（ロケーション）定義 =====
+  const LOCATION_CITIES = ['富山市', '高岡市', '射水市', '砺波市', '氷見市', '南砺市'];
+  const LOCATION_OTHER = '__OTHER__';
+  const [locationChoice, setLocationChoice] = useState(null); // 都市名 or LOCATION_OTHER
+  const [locationOtherText, setLocationOtherText] = useState('');
+  const chosenLocation = useMemo(
+    () => (locationChoice === LOCATION_OTHER ? locationOtherText.trim() : (locationChoice || '')),
+    [locationChoice, locationOtherText]
+  );
+
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -463,8 +473,19 @@ export default function ProjectRegisterScreen({ route }) {
   // ─────────────────────────────
   // 左フォームに値を流し込むヘルパー
   // ─────────────────────────────
+  // 先頭の【場所】をパース
+  const parseNameForLocation = (fullName) => {
+    const m = String(fullName || '').match(/^【([^】]+)】(.*)$/);
+    if (m) return { loc: m[1], plain: (m[2] || '').trim() };
+    return { loc: null, plain: String(fullName || '') };
+  };
+
   const prefillLeftForm = useCallback((src, { appendCopySuffix = false } = {}) => {
-    setName(src.name ? (appendCopySuffix ? `${src.name} (コピー)` : src.name) : '');
+    // name から【場所】を分離（src.location があれば優先）
+    const parsed = parseNameForLocation(src.name);
+    const loc = src.location || parsed.loc;
+    const plainName = src.location ? parsed.plain || parsed.plain === '' ? parsed.plain : src.name : parsed.plain;
+    setName(plainName ? (appendCopySuffix ? `${plainName} (コピー)` : plainName) : '');
     setClientName(src.clientName ?? '');
     const s = toSafeDate(src.startDate) ?? roundToHour(new Date());
     const e = toSafeDate(src.endDate) ?? s;
@@ -479,6 +500,19 @@ export default function ProjectRegisterScreen({ route }) {
     setSurvey(src.survey ?? PH);
     setDesign(src.design ?? PH);
     setManagement(src.management ?? PH);
+    // ロケーションのプリフィル
+    if (loc) {
+      if (LOCATION_CITIES.includes(loc)) {
+        setLocationChoice(loc);
+        setLocationOtherText('');
+     } else {
+        setLocationChoice(LOCATION_OTHER);
+        setLocationOtherText(loc);
+      }
+    } else {
+      setLocationChoice(null);
+      setLocationOtherText('');
+    }
     // participantPlan が来ていれば日毎選択に展開
     if (src.participantPlan && typeof src.participantPlan === 'object') {
       const next = {};
@@ -536,6 +570,11 @@ useEffect(() => {
       return Alert.alert('入力エラー', 'すべての役割を「選択してください」以外に設定してください');
     }
     if (!name.trim()) return Alert.alert('入力エラー', 'プロジェクト名を入力してください');
+    if (!name.trim()) return Alert.alert('入力エラー', 'プロジェクト名を入力してください');
+    if (!locationChoice) return Alert.alert('入力エラー', '場所を選択してください');
+    if (locationChoice === LOCATION_OTHER && !locationOtherText.trim()) {
+      return Alert.alert('入力エラー', 'その他地域名を入力してください');
+    } 
     if (!clientName.trim()) return Alert.alert('入力エラー', '顧客名を入力してください');
 
     const participantObjs = employees.filter(e => participants.includes(e.id));
@@ -570,8 +609,10 @@ useEffect(() => {
       if (arr.length) participantPlan[y] = arr;
     }
     const hasAnyParticipants = Object.keys(participantPlan).length > 0;
+    // 表示名は【場所】プロジェクト名 で保存
+    const finalName = `【${chosenLocation}】${name.trim()}`;
     const payload = {
-      name: name.trim(),
+      name: finalName,
       clientName: clientName.trim(),
       startDate,
       endDate,
@@ -586,7 +627,7 @@ useEffect(() => {
       travelCost: toNumberOrNull(travelCost),
       miscExpense: toNumberOrNull(miscExpense),
       areaSqm: toNumberOrNull(areaSqm),
-      projectType: projectType,
+      location: chosenLocation, // ★ 検索や集計用に別フィールドも保存
 
       laborCost,
       rentalResourceCost,
@@ -690,7 +731,8 @@ useEffect(() => {
         setSurvey(PH);
         setDesign(PH);
         setManagement(PH);
-        setVehicleSelections({});
+        setLocationChoice(null);
+        setLocationOtherText('');
         await loadProjects();
         Alert.alert('成功', 'プロジェクトを追加しました');
       }
@@ -718,6 +760,49 @@ useEffect(() => {
         <Text style={tw`text-lg font-bold mb-2`}>
           {editingProjectId ? 'プロジェクト編集' : 'プロジェクト追加'}
         </Text>
+
+        {/* ===== 場所（プロジェクト名の前） ===== */}
+        <Text style={tw`mt-1`}>場所</Text>
+        <View style={tw`flex-row flex-wrap -mx-1 mb-2`}>
+          {LOCATION_CITIES.map(city => {
+            const selected = locationChoice === city;
+            return (
+              <TouchableOpacity
+                key={city}
+                activeOpacity={0.7}
+                onPress={() => { setLocationChoice(city); setLocationOtherText(''); }}
+                style={tw.style(
+                  'm-1 px-3 py-2 rounded border',
+                  selected ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'
+                )}
+              >
+                <Text>{(selected ? '☑ ' : '☐ ') + city}</Text>
+              </TouchableOpacity>
+            );
+          })}
+          {/* その他ボタン */}
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() => setLocationChoice(LOCATION_OTHER)}
+            style={tw.style(
+              'm-1 px-3 py-2 rounded border',
+              locationChoice === LOCATION_OTHER ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'
+            )}
+          >
+            <Text>{(locationChoice === LOCATION_OTHER ? '☑ ' : '☐ ') + 'その他地域'}</Text>
+          </TouchableOpacity>
+        </View>
+        {locationChoice === LOCATION_OTHER && (
+          <View style={tw`mb-2`}>
+            <Text>その他地域名を入力</Text>
+           <TextInput
+              value={locationOtherText}
+              onChangeText={setLocationOtherText}
+              placeholder="例: 小矢部市、舟橋村 など"
+              style={tw`border p-2 rounded`}
+            />
+          </View>
+        )}
 
         <Text>プロジェクト名</Text>
         <TextInput
