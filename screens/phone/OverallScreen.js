@@ -1,7 +1,7 @@
 // WIPScreenの成功パターンを参考にしたOverallScreen.js
 import React, { useState, useContext, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  View, Text, TouchableOpacity, TextInput, ScrollView, RefreshControl
+  View, Text, TouchableOpacity, TextInput, ScrollView, RefreshControl, Alert
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
@@ -9,6 +9,8 @@ import { DateContext } from '../../DateContext';
 import DateHeader from '../../DateHeader';
 import { fetchProjectsOverlappingRange } from '../../firestoreService'; // ★ 追加
 import { useFocusEffect } from '@react-navigation/native';
+import { signOut } from 'firebase/auth';
+import { auth } from '../../firebaseConfig';
 
 export default function OverallScreen({ navigation, route }) {
   const TTL_MS = 60 * 1000; // 60秒
@@ -18,6 +20,27 @@ export default function OverallScreen({ navigation, route }) {
     setShowPicker(false);
     if (d) setDate(d);
   };
+
+  // ★ 変更: 確認ダイアログ → 承認時のみ signOut
+  const doLogout = async () => {
+    try {
+      await signOut(auth); // onAuthStateChanged(App.js) 側で未ログインルートへ遷移
+    } catch (e) {
+      console.warn('signOut error:', e);
+      Alert.alert('ログアウトに失敗しました', e?.message ?? String(e));
+    }
+  };
+  const showConfirmLogout = () => {
+    Alert.alert(
+      'ログアウトしますか',
+      '現在のアカウントからサインアウトします。',
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        { text: 'ログアウトする', style: 'destructive', onPress: doLogout },
+      ]
+    );
+  };
+
 
   // 表示用フォーマッタ
   const fmtJPY = useCallback((n) => {
@@ -160,7 +183,7 @@ export default function OverallScreen({ navigation, route }) {
   );
 
   return (
-    <View style={tw`flex-1 bg-gray-100`}>
+    <View style={tw`flex-1 bg-gray-100 relative`}>
       {/* ヘッダー */}
       <DateHeader date={selectedDate} onPressOpenPicker={() => setShowPicker(true)} />
       {showPicker && (
@@ -175,7 +198,7 @@ export default function OverallScreen({ navigation, route }) {
       {/* メインコンテンツ */}
       <ScrollView
         style={tw`flex-1`}
-        contentContainerStyle={tw`p-4`}
+        contentContainerStyle={tw`p-4 pb-24`}
         refreshControl={
           <RefreshControl
             refreshing={isRefreshing}
@@ -293,6 +316,16 @@ export default function OverallScreen({ navigation, route }) {
           </View>
         </View>
       </ScrollView>
+      {/* ★ 追加：右下固定のログアウトボタン（ProfileScreen と同一機能） */}
+      <View style={tw`absolute bottom-4 right-4`}>
+        <TouchableOpacity
+          onPress={showConfirmLogout}
+          activeOpacity={0.7}
+          style={tw`bg-red-500 rounded-2xl px-4 py-3 shadow`}
+        >
+          <Text style={tw`text-white font-bold`}><Text>ログアウト</Text></Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }

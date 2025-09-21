@@ -22,7 +22,15 @@ import { db, storage } from './firebaseConfig';
 import { getAuth } from 'firebase/auth';
 import * as FileSystem from 'expo-file-system';
 import { getApp } from 'firebase/app';
- 
+
+// ─────────────────────────────────────────────
+// 役割判定（統一ロジック）
+//   executive / manager / 事務（department==='事務'）を特権ユーザー扱い
+// ─────────────────────────────────────────────
+export function isPrivUser(me) {
+  if (!me) return false;
+  return me.role === 'executive' || me.role === 'manager' || me.department === '事務';
+}
 
 // Base64 -> Uint8Array（atob/Buffer 非依存で動く純JSデコーダ）
 function base64ToUint8Array(b64) {
@@ -475,7 +483,23 @@ export async function fetchProjectsOverlappingRange(start, end) {
   return [...map.values()];
 }
 
-
+// ─────────────────────────────────────────────
+// 新規: 可視性（visibility）を考慮した範囲取得
+//   - visibility 未設定 or 'public' は常に返す
+//   - 'limited' は特権ユーザー（isPrivUser）にのみ返す
+//   ※ Firestore の仕様上「未設定フィールドをサーバで絞る」ことは難しいため、
+//     既存の範囲取得結果に対してクライアント側で可視性フィルタを適用します。
+// ─────────────────────────────────────────────
+export async function fetchProjectsOverlappingRangeVisible(start, end, me) {
+  const list = await fetchProjectsOverlappingRange(start, end);
+  const allowLimited = isPrivUser(me);
+  return (list || []).filter(p => {
+    const v = p?.visibility ?? null; // 未設定は public 扱い
+    if (v === 'limited') return allowLimited;
+    // 'public' または未設定
+    return true;
+  });
+}
 
 /**
  * プロジェクトの役割情報のみ更新

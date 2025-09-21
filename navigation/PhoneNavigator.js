@@ -1,5 +1,5 @@
 // src/navigation/PhoneNavigator.js
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -12,10 +12,28 @@ import WIPScreen from '../screens/phone/WIPScreen';
 // import BillingScreen from '../screens/phone/BillingScreen';
 import ProfileStackScreen from '../screens/phone/ProfileStackScreen';
 import OverallStackNavigator from '../screens/phone/OverallStackNavigator';
+import { getAuth } from 'firebase/auth';
+import { findEmployeeByIdOrEmail, isPrivUser } from '../firestoreService';
 
 const Tab = createBottomTabNavigator();
 
 export default function PhoneNavigator({ userEmail }) {
+  const [me, setMe] = useState(null);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const auth = getAuth();
+        const email = userEmail || auth?.currentUser?.email || null;
+        if (!email) return;
+        const emp = await findEmployeeByIdOrEmail(email);
+        if (mounted) setMe(emp);
+      } catch (_) {}
+    })();
+    return () => { mounted = false; };
+  }, [userEmail]);
+
   return (
     <Tab.Navigator
       initialRouteName="Overall" // ★ログイン後の初期タブをOverallへ
@@ -79,12 +97,14 @@ export default function PhoneNavigator({ userEmail }) {
         options={{ title: 'WIP' }}
         initialParams={{ userEmail }} // ★ 追加
       />
-      <Tab.Screen
-        name="Profile"
-        component={ProfileStackScreen}
-        options={{ title: 'プロフィール' }}
-        initialParams={{ userEmail }} // ★ 追加
-      />
+      {isPrivUser(me) && (
+        <Tab.Screen
+          name="Profile"
+          component={ProfileStackScreen}
+          options={{ title: 'プロフィール' }}
+          initialParams={{ userEmail }} // ★ 追加
+        />
+      )}
 
       {/* Billing はタブに出さない（参考用にファイルは残す） */}
     </Tab.Navigator>
