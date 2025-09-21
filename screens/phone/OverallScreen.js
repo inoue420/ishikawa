@@ -7,7 +7,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
 import { DateContext } from '../../DateContext';
 import DateHeader from '../../DateHeader';
-import { fetchProjectsOverlappingRange } from '../../firestoreService'; // ★ 追加
+import { fetchProjectsOverlappingRangeVisible, findEmployeeByIdOrEmail } from '../../firestoreService';
 import { useFocusEffect } from '@react-navigation/native';
 import { signOut } from 'firebase/auth';
 import { auth } from '../../firebaseConfig';
@@ -16,6 +16,8 @@ export default function OverallScreen({ navigation, route }) {
   const TTL_MS = 60 * 1000; // 60秒
   const { date: selectedDate, setDate } = useContext(DateContext);
   const [showPicker, setShowPicker] = useState(false);
+  const userEmail = route?.params?.userEmail ?? null;
+  const [me, setMe] = useState(null);  
   const onDateChange = (_event, d) => {
     setShowPicker(false);
     if (d) setDate(d);
@@ -41,6 +43,16 @@ export default function OverallScreen({ navigation, route }) {
     );
   };
 
+  // me 解決（userEmail → employees）
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!userEmail) return;
+      const emp = await findEmployeeByIdOrEmail(userEmail);
+      if (mounted) setMe(emp);
+    })();
+    return () => { mounted = false; };
+  }, [userEmail]);  
 
   // 表示用フォーマッタ
   const fmtJPY = useCallback((n) => {
@@ -106,7 +118,7 @@ export default function OverallScreen({ navigation, route }) {
       setIsRefreshing(true); didSetSpinner = true;
     }
     try {
-      const list = await fetchProjectsOverlappingRange(dayStart, dayEnd);
+      const list = await fetchProjectsOverlappingRangeVisible(dayStart, dayEnd, me);
       if (mySeq !== reqSeqRef.current) return; // 古い応答は破棄
 
       let sales = 0, labor = 0, transport = 0, misc = 0, rentals = 0, newOrders = 0;
@@ -140,7 +152,7 @@ export default function OverallScreen({ navigation, route }) {
       refreshingRef.current = false;
       if (didSetSpinner) setIsRefreshing(false);
     }
-  }, [selectedDate, dayStart, dayEnd]);
+  }, [selectedDate, dayStart, dayEnd, me]);
 
   // 画面フォーカス時：TTLに従って再取得
   useFocusEffect(useCallback(() => { loadTotals({ force: false, withSpinner: false }); }, [loadTotals]));

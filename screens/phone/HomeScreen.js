@@ -1,11 +1,11 @@
 // screens/phone/HomeScreen.js
 import React, { useEffect, useState, useContext, useRef, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Button, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Button, RefreshControl, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
 import { DateContext } from '../../DateContext';
-import { fetchProjectsOverlappingRange, findEmployeeByIdOrEmail } from '../../firestoreService';
+import { fetchProjectsOverlappingRangeVisible, findEmployeeByIdOrEmail, isPrivUser } from '../../firestoreService';
 import { useFocusEffect } from '@react-navigation/native';
 
 export default function HomeScreen({ navigation, route }) {
@@ -62,6 +62,22 @@ export default function HomeScreen({ navigation, route }) {
     return /[A-Za-z]/.test(ch) ? ch.toUpperCase() : ch; // 日本語はそのまま先頭文字
   };
 
+  // ★ name から【場所】を抽出
+  const parseNameForLocation = (fullName) => {
+    const m = String(fullName || '').match(/^【([^】]+)】(.*)$/);
+    if (m) return { loc: m[1], plain: (m[2] || '').trim() };
+    return { loc: null, plain: String(fullName || '') };
+  };
+  // ★ 表示名：限定公開なら「限定公開　」を括弧内の先頭に入れる
+  const displayTitle = (proj) => {
+    const raw = proj.name || proj.title || '（名称未設定）';
+    const { loc, plain } = parseNameForLocation(raw);
+    const locFinal = proj.location || loc || '';
+    if (!locFinal) return raw; // 念のため
+    const prefix = proj?.visibility === 'limited' ? '限定公開　' : '';
+    return `【${prefix}${locFinal}】${plain}`;
+  };
+
   const onDateChange = (_, d) => {
     setShowPicker(false);
     if (d) setDate(d);
@@ -89,8 +105,8 @@ export default function HomeScreen({ navigation, route }) {
       const selStart = new Date(selectedDate); selStart.setHours(0, 0, 0, 0);
       const selEnd   = new Date(selectedDate); selEnd.setHours(23, 59, 59, 999);
 
-      // ★ サーバ側で重なりのみ取得
-      const list = await fetchProjectsOverlappingRange(selStart, selEnd);
+      // ★ 可視性（public + 条件付き limited）を考慮した取得
+       const list = await fetchProjectsOverlappingRangeVisible(selStart, selEnd, me);
       if (mySeq !== reqSeqRef.current) return; // 古い応答は破棄
 
       // 表示順：開始時刻昇順
@@ -124,12 +140,14 @@ export default function HomeScreen({ navigation, route }) {
       if (didSetSpinner) setIsRefreshing(false);
       setLoading(false);
     }
-  }, [selectedDate, projects.length]);
+  }, [selectedDate, projects.length, me]);
 
   // 画面フォーカス時：TTLに従って再取得
   useFocusEffect(useCallback(() => { loadProjects({ force: false, withSpinner: false }); }, [loadProjects]));
   // 日付変更時：強制更新
   useEffect(() => { loadProjects({ force: true, withSpinner: false }); }, [selectedDate, loadProjects]);
+  // 権限（me）変化時：強制更新
+  useEffect(() => { if (me) loadProjects({ force: true, withSpinner: false }); }, [me, loadProjects]);
 
   if (loading) {
     return (
@@ -187,9 +205,14 @@ export default function HomeScreen({ navigation, route }) {
             return (
               <TouchableOpacity
                 key={proj.id}
-                onPress={() =>
-                  navigation.navigate('ProjectDetail', { projectId: proj.id, date: dateKey(selectedDate) })
-                }
+                onPress={() => {
+                  // 限定公開 + 非特権者は閲覧不可
+                  if (proj?.visibility === 'limited' && !isPrivUser(me)) {
+                    Alert.alert('閲覧できません', 'このプロジェクトは限定公開です（役員・部長・事務のみ）。');
+                    return;
+                  }
+                  navigation.navigate('ProjectDetail', { projectId: proj.id, date: dateKey(selectedDate) });
+                }}
                 activeOpacity={0.75}
                 style={tw`mb-3`}
               >
@@ -206,13 +229,19 @@ export default function HomeScreen({ navigation, route }) {
                   </View>
 
                   {/* 中央：カード（高さ確保のため minHeight を付与） */}
-                  <View style={[tw`flex-1 bg-white rounded-xl shadow p-3 border border-gray-100`, { minHeight: 56 }]}>
+                  <View style={[tw`flex-1 bg-white rounded-xl shadow p-3 border border-gray-100 relative`, { minHeight: 56 }]}>
                     <Text style={tw`text-base font-bold`} numberOfLines={1}>
-                      {proj.name || proj.title || '（名称未設定）'}
+                      {displayTitle(proj)}
                     </Text>
                     <Text style={tw`text-gray-500 mt-1`} numberOfLines={1}>
                       {memberNames.length ? memberNames.join('、') : 'メンバー未設定'}
                     </Text>
+                    {/* 視覚ラベル：限定公開 */}
+                    {proj?.visibility === 'limited' && (
+                      <View style={tw`absolute top-2 left-2 bg-amber-100 border border-amber-300 rounded px-2 py-0.5`}>
+                        <Text style={tw`text-amber-800 text-xs`}>限定公開</Text>
+                      </View>
+                    )}
                   </View>
 
                   {/* 右：作成者頭文字アイコン（縦中央） */}

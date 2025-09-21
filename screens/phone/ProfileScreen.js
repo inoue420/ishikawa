@@ -14,16 +14,20 @@ import {
 import tw from 'twrnc';
 import { signOut } from 'firebase/auth';
 import { auth } from '../../firebaseConfig';
+import { getAuth } from 'firebase/auth';
 
 // Firestore service 関数をインポート
 import {
   fetchCompanyProfile,
   setCompanyProfile,
+  findEmployeeByIdOrEmail,
+  isPrivUser,
 } from '../../firestoreService';
 
 const { width } = Dimensions.get('window');
 
 export default function ProfileScreen({ navigation }) {
+  const [checking, setChecking] = useState(true);
   const [companyName, setCompanyName] = useState('');
   const [bankName, setBankName] = useState('');
   const [branchName, setBranchName] = useState('');
@@ -31,6 +35,34 @@ export default function ProfileScreen({ navigation }) {
   const [accountNumber, setAccountNumber] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // 直リンク対策：マウント時に特権判定し、非特権なら戻す
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const a = getAuth();
+        const email = a?.currentUser?.email || null;
+        const me = email ? await findEmployeeByIdOrEmail(email) : null;
+        if (mounted) {
+          if (!isPrivUser(me)) {
+            Alert.alert('アクセスできません', 'この画面は役員・部長・事務のみが閲覧できます。', [
+              { text: 'OK', onPress: () => navigation.goBack() },
+            ]);
+          }
+          setChecking(false);
+        }
+      } catch (_) {
+        if (mounted) {
+          Alert.alert('アクセスできません', 'この画面は役員・部長・事務のみが閲覧できます。', [
+            { text: 'OK', onPress: () => navigation.goBack() },
+          ]);
+          setChecking(false);
+        }
+      }
+    })();
+    return () => { mounted = false; };
+  }, [navigation]);
+ 
   // Firestore から既存の会社情報を読み込む
   useEffect(() => {
     (async () => {
@@ -49,6 +81,11 @@ export default function ProfileScreen({ navigation }) {
       }
     })();
   }, []);
+
+  if (checking) {
+    // 権限確認中は何も表示しない（フラッシュ防止）
+    return <View style={tw`flex-1 bg-white`} />;
+  }
 
   // Firestore に会社情報を保存／更新
   const handleSave = async () => {

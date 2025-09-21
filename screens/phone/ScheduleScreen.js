@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import tw from 'twrnc';
 import { CalendarList, LocaleConfig } from 'react-native-calendars';
 import { DateContext } from '../../DateContext';
-import { fetchProjectsOverlappingRange } from '../../firestoreService';
+import { fetchProjectsOverlappingRangeVisible, findEmployeeByIdOrEmail } from '../../firestoreService';
 
 // ---------- 日本語ローカライズ ----------
 LocaleConfig.locales['ja'] = {
@@ -43,6 +43,13 @@ const colorFromId = (id) => {
   return hslToHex(hue, 70, 50);
 };
 
+// ★ name から【場所】を抽出
+const parseNameForLocation = (fullName) => {
+  const m = String(fullName || '').match(/^【([^】]+)】(.*)$/);
+  if (m) return { loc: m[1], plain: (m[2] || '').trim() };
+  return { loc: null, plain: String(fullName || '') };
+};
+
 // ===== 表示調整（必要に応じて調整OK） =====
  const MAX_LANES    = 4;   // 1日あたり最大4行
  const CELL_HEIGHT  = 90; // セルの高さ（最終週も入るよう少し余裕）
@@ -51,13 +58,38 @@ const colorFromId = (id) => {
  const CAL_HEIGHT   = HEADER_SPACE + CELL_HEIGHT * 6 + 4; // 6週ぶんを確保
  const DAY_MS = 24 * 60 * 60 * 1000;
 
-export default function ScheduleScreen({ navigation }) {
+export default function ScheduleScreen({ navigation, route }) {
+  // 可能な限り上位のナビゲータから userEmail を拾う
+  const findUserEmailFromNav = useCallback(() => {
+    // 1) 自画面の params
+    if (route?.params?.userEmail) return route.params.userEmail;
+    try {
+      // 2) 親スタック / ルートを遡って探す
+      let nav = navigation;
+      for (let i = 0; i < 3 && nav?.getParent; i++) {
+        nav = nav.getParent();
+        const state = nav?.getState?.();
+        const routes = state?.routes || [];
+        for (const r of routes) {
+          const p = r?.params;
+          if (p?.userEmail) return String(p.userEmail);
+        }
+      }
+    } catch {}
+    return null;
+  }, [navigation, route?.params?.userEmail]);
   const { date, setDate } = useContext(DateContext);
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState([]);
   const cacheRef = useRef(new Map());
   const screenWidth = Dimensions.get('window').width;
   const dayWidth = useMemo(() => screenWidth / 7, [screenWidth]);
+  const userEmail = route?.params?.userEmail ?? findUserEmailFromNav();
+  const [me, setMe] = useState(null);
+  // me 変化時にキャッシュをリセット（権限に応じた可視性のズレ防止）
+  useEffect(() => {
+    cacheRef.current = new Map();
+  }, [me]);  
 
   // 表示中の月（1日固定）
   const [visibleMonth, setVisibleMonth] = useState(() => {
@@ -70,6 +102,18 @@ export default function ScheduleScreen({ navigation }) {
     todayTextColor: '#2563eb',
     arrowColor: '#111827',
   }), []);
+
+  // ログインユーザー me 解決
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!userEmail) return;
+      const emp = await findEmployeeByIdOrEmail(userEmail);
+      if (mounted) setMe(emp);
+    })();
+    return () => { mounted = false; };
+  }, [userEmail]);
+  
 
   // 月単位ロード（前後3日バッファ）
   useEffect(() => {
@@ -88,7 +132,7 @@ export default function ScheduleScreen({ navigation }) {
           setLoading(false);
           return;
         }
-        const rows = await fetchProjectsOverlappingRange(rangeStart, rangeEnd);
+        const rows = await fetchProjectsOverlappingRangeVisible(rangeStart, rangeEnd, me);
         const data = rows ?? [];
         cacheRef.current.set(ym, data);
         setProjects(data);
@@ -98,7 +142,7 @@ export default function ScheduleScreen({ navigation }) {
         setLoading(false);
       }
     })();
-  }, [visibleMonth]);
+  }, [visibleMonth, me]);
 
   /**
    * 各「日」ごとにアクティブな予定を集め、優先度で上に詰める。
@@ -132,7 +176,11 @@ export default function ScheduleScreen({ navigation }) {
       const isMulti = (e - s) >= DAY_MS;              // 複数日判定
       const startMs = s0.getTime();                   // 並べ替えキー（開始日時）
       const projectKey = String(p.id ?? p.title ?? '');
-      const title = String(p.title ?? p.name ?? p.id ?? '（無題）');
+      const rawTitle = String(p.title ?? p.name ?? p.id ?? '（無題）');
+      const { loc, plain } = parseNameForLocation(rawTitle);
+      const locFinal = p.location || loc || '';
+      const prefix = p?.visibility === 'limited' ? '限定公開　' : '';
+      const title = locFinal ? `【${prefix}${locFinal}】${plain}` : rawTitle;
       const color = colorFromId(projectKey);
 
       // 週固定はやめ、セグメント全期間をその日ごとに登録

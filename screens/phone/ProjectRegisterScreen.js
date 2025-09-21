@@ -174,6 +174,8 @@ export default function ProjectRegisterScreen({ route }) {
 
   // 新規/既存
   const [projectType, setProjectType] = useState(null);
+  // 限定公開フラグ
+  const [visibilityLimited, setVisibilityLimited] = useState(false);
 
 
   // 従業員・担当
@@ -498,6 +500,7 @@ export default function ProjectRegisterScreen({ route }) {
     setStartDate(s);
     setEndDate(e);
     setProjectType(src.projectType ?? null);
+    setVisibilityLimited((src.visibility ?? 'public') === 'limited');
     setOrderAmount(src.orderAmount != null ? formatThousandsInput(String(src.orderAmount)) : '');
     setTravelCost(src.travelCost != null ? formatThousandsInput(String(src.travelCost)) : '');
     setMiscExpense(src.miscExpense != null ? formatThousandsInput(String(src.miscExpense)) : '');
@@ -631,8 +634,9 @@ useEffect(() => {
       if (arr.length) participantPlan[y] = arr;
     }
     const hasAnyParticipants = Object.keys(participantPlan).length > 0;
-    // 表示名は【場所】プロジェクト名 で保存
-    const finalName = `【${chosenLocation}】${name.trim()}`;
+    // 表示名は【（限定公開なら'限定公開　'）場所】プロジェクト名 で保存
+    const bracket = visibilityLimited ? `限定公開　${chosenLocation}` : chosenLocation;
+    const finalName = `【${bracket}】${name.trim()}`;
     const payload = {
       name: finalName,
       clientName: clientName.trim(),
@@ -649,12 +653,14 @@ useEffect(() => {
       managementOtherName: managementChoice === OTHER_ROLE ? managementOtherName.trim() : null,
       participants,
       isMilestoneBilling: false,
+      projectType,
 
       orderAmount: toNumberOrNull(orderAmount),
       travelCost: toNumberOrNull(travelCost),
       miscExpense: toNumberOrNull(miscExpense),
       areaSqm: toNumberOrNull(areaSqm),
       location: chosenLocation, // ★ 検索や集計用に別フィールドも保存
+      visibility: visibilityLimited ? 'limited' : 'public',
 
       laborCost,
       rentalResourceCost,
@@ -760,6 +766,7 @@ useEffect(() => {
         setManagementChoice(null); setManagementOtherName('');
         setLocationChoice(null);
         setLocationOtherText('');
+        setVisibilityLimited(false);
         await loadProjects();
         Alert.alert('成功', 'プロジェクトを追加しました');
       }
@@ -830,6 +837,26 @@ useEffect(() => {
             />
           </View>
         )}
+
+        {/* ★ 限定公開（場所の下／プロジェクト名の上） */}
+        <Text>限定公開登録</Text>
+        <View style={tw`mb-3`}>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() => setVisibilityLimited(v => !v)}
+            style={tw.style(
+              'px-3 py-2 rounded border self-start',
+              visibilityLimited ? 'bg-amber-100 border-amber-400' : 'bg-white border-gray-300'
+            )}
+          >
+            <Text>{visibilityLimited ? '☑ 限定公開（役員・部長・事務のみ）' : '☐ 限定公開（役員・部長・事務のみ）'}</Text>
+          </TouchableOpacity>
+          <Text style={tw`text-xs text-gray-600 mt-1`}>
+            {visibilityLimited
+              ? '限定公開にすると、スケジュールや一覧で【限定公開　場所】と表示され、一般社員は詳細を開けません。'
+              : '未選択の場合は通常公開です。'}
+          </Text>
+        </View>
 
         <Text>プロジェクト名</Text>
         <TextInput
