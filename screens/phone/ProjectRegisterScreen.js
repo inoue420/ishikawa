@@ -18,7 +18,6 @@ import {
   findEmployeeByIdOrEmail,
   fetchProjectsOverlappingRange,
 } from '../../firestoreService';
-import { Picker } from '@react-native-picker/picker';
 import {
   fetchVehicles,
   fetchVehicleBlocksOverlapping,
@@ -112,8 +111,6 @@ const calcWorkHours = (start, end) => {
   return ms > 0 ? (ms / 3600000) : 0;
 };
 
-// Picker のプレースホルダー値
-const PH = '__placeholder__';
 
 export default function ProjectRegisterScreen({ route }) {
   // ===== 場所（ロケーション）定義 =====
@@ -126,6 +123,19 @@ export default function ProjectRegisterScreen({ route }) {
     [locationChoice, locationOtherText]
   );
 
+  // ===== 役割（担当）用：チップ選択 + その他手入力 =====
+  const OTHER_ROLE = '__OTHER_ROLE__';
+  // 4役割ごとの選択状態（選択中ID or OTHER_ROLE）と「その他」入力
+  const [salesChoice, setSalesChoice] = useState(null);
+  const [salesOtherName, setSalesOtherName] = useState('');
+  const [surveyChoice, setSurveyChoice] = useState(null);
+  const [surveyOtherName, setSurveyOtherName] = useState('');
+  const [designChoice, setDesignChoice] = useState(null);
+  const [designOtherName, setDesignOtherName] = useState('');
+  const [managementChoice, setManagementChoice] = useState(null);
+  const [managementOtherName, setManagementOtherName] = useState('');
+  // 選択値の「表示名」を取得（ID→社員名 / その他→入力テキスト）
+  // （表示名が必要になったらここで使用）
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -168,10 +178,6 @@ export default function ProjectRegisterScreen({ route }) {
 
   // 従業員・担当
   const [employees, setEmployees] = useState([]);
-  const [sales, setSales] = useState(PH);
-  const [survey, setSurvey] = useState(PH);
-  const [design, setDesign] = useState(PH);
-  const [management, setManagement] = useState(PH);
   // 日毎の参加者選択 { 'YYYY-MM-DD': Set<employeeId> }
   const [participantSelectionsByDay, setParticipantSelectionsByDay] = useState({});
   // 使用不可マップ { 'YYYY-MM-DD': Set<employeeId> }
@@ -496,10 +502,22 @@ export default function ProjectRegisterScreen({ route }) {
     setTravelCost(src.travelCost != null ? formatThousandsInput(String(src.travelCost)) : '');
     setMiscExpense(src.miscExpense != null ? formatThousandsInput(String(src.miscExpense)) : '');
     setAreaSqm(src.areaSqm != null ? String(src.areaSqm) : '');
-    setSales(src.sales ?? PH);
-    setSurvey(src.survey ?? PH);
-    setDesign(src.design ?? PH);
-    setManagement(src.management ?? PH);
+    // 役割プリフィル（ID か その他文字列）
+    const fillRole = (idValue, otherValue, setChoice, setOther) => {
+      const id = idValue || null;
+      const other = (otherValue || '').trim();
+      if (id) { // 従業員一覧未ロードでもIDを尊重
+        setChoice(id); setOther('');
+      } else if (other) {
+        setChoice(OTHER_ROLE); setOther(other);
+      } else {
+        setChoice(null); setOther('');
+      }
+    };
+    fillRole(src.sales, src.salesOtherName, setSalesChoice, setSalesOtherName);
+    fillRole(src.survey, src.surveyOtherName, setSurveyChoice, setSurveyOtherName);
+    fillRole(src.design, src.designOtherName, setDesignChoice, setDesignOtherName);
+    fillRole(src.management, src.managementOtherName, setManagementChoice, setManagementOtherName);
     // ロケーションのプリフィル
     if (loc) {
       if (LOCATION_CITIES.includes(loc)) {
@@ -521,7 +539,7 @@ export default function ProjectRegisterScreen({ route }) {
       });
       setParticipantSelectionsByDay(next);
     }
-  }, []);  
+  }, [employeesById]); 
 
   // ─────────────────────────────────────────────
   // 事前入力（コピー / 編集）:
@@ -566,10 +584,14 @@ useEffect(() => {
 
   const handleSubmit = async () => {
     // 担当の未選択チェック
-    if ([sales, survey, design, management].some(v => v === PH)) {
-      return Alert.alert('入力エラー', 'すべての役割を「選択してください」以外に設定してください');
+    // 役割バリデーション：ID選択 or その他テキスト必須
+    const roleOk = (choice, other) => choice && (choice !== OTHER_ROLE || (OTHER_ROLE && other.trim()));
+    if (!roleOk(salesChoice, salesOtherName)
+      || !roleOk(surveyChoice, surveyOtherName)
+      || !roleOk(designChoice, designOtherName)
+      || !roleOk(managementChoice, managementOtherName)) {
+      return Alert.alert('入力エラー', '各担当は「社員の選択」か「その他テキスト」のいずれかを入力してください');
     }
-    if (!name.trim()) return Alert.alert('入力エラー', 'プロジェクト名を入力してください');
     if (!name.trim()) return Alert.alert('入力エラー', 'プロジェクト名を入力してください');
     if (!locationChoice) return Alert.alert('入力エラー', '場所を選択してください');
     if (locationChoice === LOCATION_OTHER && !locationOtherText.trim()) {
@@ -616,10 +638,15 @@ useEffect(() => {
       clientName: clientName.trim(),
       startDate,
       endDate,
-      sales,
-      survey,
-      design,
-      management,
+      // 役割は ID（社員選択時のみ）を保存、その他は *_OtherName に保存
+      sales:      (salesChoice      && salesChoice      !== OTHER_ROLE) ? salesChoice      : null,
+      survey:     (surveyChoice     && surveyChoice     !== OTHER_ROLE) ? surveyChoice     : null,
+      design:     (designChoice     && designChoice     !== OTHER_ROLE) ? designChoice     : null,
+      management: (managementChoice && managementChoice !== OTHER_ROLE) ? managementChoice : null,
+      salesOtherName:      salesChoice      === OTHER_ROLE ? salesOtherName.trim()      : null,
+      surveyOtherName:     surveyChoice     === OTHER_ROLE ? surveyOtherName.trim()     : null,
+      designOtherName:     designChoice     === OTHER_ROLE ? designOtherName.trim()     : null,
+      managementOtherName: managementChoice === OTHER_ROLE ? managementOtherName.trim() : null,
       participants,
       isMilestoneBilling: false,
 
@@ -727,10 +754,10 @@ useEffect(() => {
         setMiscExpense('');
         setAreaSqm('');
         setProjectType(null);
-        setSales(PH);
-        setSurvey(PH);
-        setDesign(PH);
-        setManagement(PH);
+        setSalesChoice(null); setSalesOtherName('');
+        setSurveyChoice(null); setSurveyOtherName('');
+        setDesignChoice(null); setDesignOtherName('');
+        setManagementChoice(null); setManagementOtherName('');
         setLocationChoice(null);
         setLocationOtherText('');
         await loadProjects();
@@ -874,46 +901,62 @@ useEffect(() => {
           style={tw`border p-2 mb-2 rounded`}
         />
 
-        {/* 各担当（役員・部長のみ） */}
-        <Text>営業担当</Text>
-        <View style={tw`border rounded mb-2 overflow-hidden`}>
-          <Picker selectedValue={sales} onValueChange={setSales}>
-            <Picker.Item label="選択してください" value={PH} color="#9ca3af" />
-            {managerCandidates.map(emp => (
-              <Picker.Item key={emp.id} label={emp.name} value={emp.id} />
-            ))}
-          </Picker>
-        </View>
-
-        <Text>現場調査担当</Text>
-        <View style={tw`border rounded mb-2 overflow-hidden`}>
-          <Picker selectedValue={survey} onValueChange={setSurvey}>
-            <Picker.Item label="選択してください" value={PH} color="#9ca3af" />
-            {managerCandidates.map(emp => (
-              <Picker.Item key={emp.id} label={emp.name} value={emp.id} />
-            ))}
-          </Picker>
-        </View>
-
-        <Text>設計担当</Text>
-        <View style={tw`border rounded mb-2 overflow-hidden`}>
-          <Picker selectedValue={design} onValueChange={setDesign}>
-            <Picker.Item label="選択してください" value={PH} color="#9ca3af" />
-            {managerCandidates.map(emp => (
-              <Picker.Item key={emp.id} label={emp.name} value={emp.id} />
-            ))}
-          </Picker>
-        </View>
-
-        <Text>管理担当</Text>
-        <View style={tw`border rounded mb-2 overflow-hidden`}>
-          <Picker selectedValue={management} onValueChange={setManagement}>
-            <Picker.Item label="選択してください" value={PH} color="#9ca3af" />
-            {managerCandidates.map(emp => (
-              <Picker.Item key={emp.id} label={emp.name} value={emp.id} />
-            ))}
-          </Picker>
-        </View>
+        {/* 各担当（役員・部長のみ） → チップUI + その他 */}
+        {(() => {
+          const RoleChips = ({ label, choice, setChoice, otherName, setOtherName }) => (
+            <View style={tw`mb-3`}>
+              <Text>{label}</Text>
+              <View style={tw`flex-row flex-wrap -mx-1 mt-1`}>
+                {managerCandidates.map(emp => {
+                  const selected = choice === emp.id;
+                  return (
+                    <TouchableOpacity
+                      key={emp.id}
+                      activeOpacity={0.7}
+                      onPress={() => { setChoice(emp.id); setOtherName(''); }}
+                      style={tw.style(
+                        'm-1 px-3 py-2 rounded border',
+                        selected ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'
+                      )}
+                    >
+                      <Text>{(selected ? '☑ ' : '☐ ') + (emp.name || '—')}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+                {/* その他 */}
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  onPress={() => setChoice(OTHER_ROLE)}
+                  style={tw.style(
+                    'm-1 px-3 py-2 rounded border',
+                    choice === OTHER_ROLE ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'
+                  )}
+                >
+                  <Text>{(choice === OTHER_ROLE ? '☑ ' : '☐ ') + 'その他'}</Text>
+                </TouchableOpacity>
+              </View>
+              {choice === OTHER_ROLE && (
+                <View style={tw`mt-2`}>
+                  <Text>担当者名（テキスト入力）</Text>
+                  <TextInput
+                    value={otherName}
+                    onChangeText={setOtherName}
+                    placeholder="例: 協力会社A 田中さん"
+                    style={tw`border p-2 rounded`}
+                  />
+                </View>
+              )}
+            </View>
+          );
+          return (
+            <View>
+              <RoleChips label="営業担当"       choice={salesChoice}       setChoice={setSalesChoice}       otherName={salesOtherName}       setOtherName={setSalesOtherName} />
+              <RoleChips label="現場調査担当"   choice={surveyChoice}      setChoice={setSurveyChoice}      otherName={surveyOtherName}      setOtherName={setSurveyOtherName} />
+              <RoleChips label="設計担当"       choice={designChoice}      setChoice={setDesignChoice}      otherName={designOtherName}      setOtherName={setDesignOtherName} />
+              <RoleChips label="管理担当"       choice={managementChoice}  setChoice={setManagementChoice}  otherName={managementOtherName}  setOtherName={setManagementOtherName} />
+            </View>
+          );
+        })()}
 
 
         {/* 日付・時刻 */}
