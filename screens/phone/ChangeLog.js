@@ -6,6 +6,8 @@ import tw from 'twrnc';
 import {
   fetchAllChangeLogsInRange,
   fetchProjects,
+  // ▼ 追加：閲覧者の判定に使用
+  findEmployeeByIdOrEmail, fetchAllUsers,  
 } from '../../firestoreService';
 
 const ACTION_LABEL = { create: '作成', update: '編集', delete: '削除' };
@@ -47,9 +49,11 @@ function Avatar({ nameOrId }) {
   );
 }
 
-export default function ChangeLog() {
+// route.params?.userEmail が渡されれば優先して閲覧者を解決
+export default function ChangeLog({ route }) {
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState([]);
+  const [me, setMe] = useState(null);
 
   // 今日全件は常に表示
   const [todayLogs, setTodayLogs] = useState([]);
@@ -73,6 +77,51 @@ export default function ChangeLog() {
     (projects || []).forEach(p => { if (p?.id) m[p.id] = p?.name || p?.title || p?.id; });
     return (id) => m[id] ?? id ?? '(不明PJ)';
   }, [projects]);
+  // ▼ 追加：プロジェクト辞書＆限定公開判定
+  const projectsById = useMemo(
+    () => Object.fromEntries((projects || []).map(p => [p.id, p])),
+    [projects]
+  );
+  const isPrivileged = useCallback((user) => {
+    const role = String(user?.role || '').toLowerCase();   // 'executive' | 'manager' | 'admin' | 'employee' など
+    const division = String(user?.division || '');         // '事務' など
+    return role === 'executive' || role === 'manager' || role === 'admin' || division === '事務';
+  }, []);
+  const isLogVisible = useCallback((log) => {
+    const pid = log?.targetId || log?.projectId;
+    // プロジェクトに紐づかないログは安全側で非表示
+    if (!pid) return false;
+    const pj = projectsById[pid];
+    // 1) PJが見えない（= fetchProjects で取得できない）→ 安全側で限定公開扱い
+    const limitedByMissing = !pj;
+    // 2) PJが見える場合は visibility / 名称プレフィックスで判定
+    const limitedByDoc =
+      pj?.visibility === 'limited' ||
+      /^【限定公開　/.test(String(pj?.name || ''));
+    const limited = limitedByMissing || limitedByDoc;
+    if (!limited) return true;
+    // 限定公開は権限者のみ
+    return !!me && isPrivileged(me);
+  }, [projectsById, me, isPrivileged]);
+
+  // ▼ 追加：閲覧者（me）の解決
+  useEffect(() => {
+    (async () => {
+      try {
+        const email = route?.params?.userEmail ? String(route.params.userEmail) : null;
+        if (email) {
+          const emp = await findEmployeeByIdOrEmail(email);
+         if (emp) { setMe(emp); return; }
+        }
+        // フォールバック：ユーザー一覧から管理権限者>先頭の順で採用
+        const emps = await fetchAllUsers();
+        const adminOrMgr = emps.find(e => ['executive','manager','admin'].includes(String(e?.role || '').toLowerCase()));
+        setMe(adminOrMgr || emps[0] || null);
+      } catch (e) {
+        // 失敗時は me=null のまま（限定公開は非表示）
+      }
+    })();
+  }, [route?.params?.userEmail]);  
 
   // 読み込み本体
   const loadAll = useCallback(async () => {
@@ -106,14 +155,16 @@ export default function ChangeLog() {
 
   // 表示用に SectionList へ整形
   const sections = useMemo(() => {
-    // 今日
+    // 今日（限定公開フィルタを適用）
     const todaySec = {
       title: '今日',
-      data: [...todayLogs].sort((a, b) => {
-        const ad = toDateMaybe(a.at) || new Date(0);
-        const bd = toDateMaybe(b.at) || new Date(0);
-        return bd - ad;
-      }),
+      data: [...todayLogs]
+        .filter(isLogVisible)
+        .sort((a, b) => {
+          const ad = toDateMaybe(a.at) || new Date(0);
+          const bd = toDateMaybe(b.at) || new Date(0);
+          return bd - ad;
+        }),
     };
 
     // 期間指定: 「昨日」「それ以前の各日」
@@ -123,6 +174,7 @@ export default function ChangeLog() {
     yesterday.setDate(today.getDate() - 1);
 
     for (const it of pastLogs) {
+      if (!isLogVisible(it)) continue;
       const d = toDateMaybe(it.at);
       if (!d) continue;
       const key = isSameDay(d, yesterday) ? '昨日' : ymd(d);
@@ -148,7 +200,7 @@ export default function ChangeLog() {
 
     // 今日セクションは常に先頭
     return [todaySec, ...pastSecs];
-  }, [todayLogs, pastLogs]);
+  }, [todayLogs, pastLogs, isLogVisible]);
 
   const renderHeader = () => (
     <View style={tw`px-4 py-3 border-b border-gray-200 bg-white`}>
