@@ -45,6 +45,7 @@ import {
   fetchAssignmentsForProject,
   saveProjectParticipantPlan,
   setEmployeeAssignment,
+  clearAssignmentsForProject,
 } from '../../firestoreService';
 import { Timestamp } from 'firebase/firestore';
 
@@ -194,9 +195,8 @@ export default function ProjectDetailScreen({ route }) {
           }
           if (u) {
             setMe({ id: u.id, name: u.name });
-            console.log('[me] resolved', u);
           }
-        } catch (e) { console.log('[me] resolve error', e); }
+        } catch (e) { /* noop: me 解決失敗は致命ではない */ }
 
         // 資材記録（当日だけ抽出）
         const allMat = await fetchMaterialsRecords();
@@ -240,7 +240,7 @@ export default function ProjectDetailScreen({ route }) {
         const vs = await fetchVehicles();
         setVehicles(vs);
       } catch (e) {
-        console.log('[vehicles] load error', e);
+        console.error('[vehicles] load error', e);
       }
     })();
   }, []);  
@@ -370,26 +370,16 @@ export default function ProjectDetailScreen({ route }) {
     return () => { cancelled = true; };
   }, [projStart?.getTime(), projEnd?.getTime(), projectId, project?.participantPlan]);
 
-  // 状態が変わったら都度ダンプ
-  useEffect(() => {
-    console.log('[vehicles][debug] unavailableMap(state)', setMapToPlainObject(unavailableMap));
-  }, [unavailableMap]);
-  useEffect(() => {
-    console.log('[vehicles][debug] vehicleSelections(state)', vehicleSelections);
-  }, [vehicleSelections]);
 
   // 画像を選ぶ（送信時にまとめて投稿）
   const handlePickImage = async () => {
   if (picking) return;
   setPicking(true);
   try {
-    console.log('[picker] start');
     // 1) 既存権限チェック
     const cur = await ImagePicker.getMediaLibraryPermissionsAsync();
-    console.log('[picker] perm', cur);
     if (!cur.granted) {
       const req = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      console.log('[picker] req', req);
       if (!req.granted) {
         Alert.alert('権限が必要です', '写真へのアクセスを許可してください。');
         return;
@@ -405,10 +395,8 @@ export default function ProjectDetailScreen({ route }) {
       allowsMultipleSelection: false,
       // selectionLimit: 1, // SDK により未対応ならコメントアウトでOK
     });
-    console.log('[picker] result', result);
     if (result?.canceled) return;
     const asset = result?.assets?.[0];
-    console.log('[picker] asset', asset);
     if (!asset?.uri) return;
     setPendingImage({ uri: asset.uri });
   } catch (e) {
@@ -426,21 +414,17 @@ export default function ProjectDetailScreen({ route }) {
     if (!commentText && !pendingImage) return;
     setSending(true);
     try {
-      console.log('[handleSend] params', { projectId, date, hasImg: !!pendingImage, textLen: commentText?.length ?? 0 });
       const { by, byName, source } = await resolveCurrentUser();
-      console.log('[send] sender', { by, byName, source, hasImage: !!pendingImage });
       let uploadedUrl = null;
 
       // 添付があれば先にアップロード → 写真コレクション → 履歴
       if (pendingImage?.uri) {
-        console.log('[handleSend] upload start', { uri: pendingImage.uri });
         const { id: photoId, url } = await uploadProjectPhoto({
           projectId,
           date,
           localUri: pendingImage.uri,
           uploadedBy: by,
         });
-        console.log('[handleSend] upload done', { photoId, url: String(url).slice(0, 80) });
         uploadedUrl = url;
 
       }
@@ -546,18 +530,44 @@ export default function ProjectDetailScreen({ route }) {
   const handleSaveParticipants = async () => {
     try {
       const { by, byName } = await resolveCurrentUser();
+      // 画面上の選択 → 保存ペイロード { ymd: string[] }
       const plan = {};
       Object.entries(participantSelections || {}).forEach(([dy, set]) => {
         const arr = Array.isArray(set) ? set : Array.from(set || []);
         if (arr.length) plan[dy] = arr;
       });
-      await saveProjectParticipantPlan(projectId, plan, datesInRange);
-      // projects にもキャッシュ保存（一覧等で使う）
+      // まずはトランザクションAPI（推奨）
+      let usedFallback = false;
+      try {
+        if (typeof saveProjectParticipantPlan === 'function') {
+          await saveProjectParticipantPlan(projectId, plan, datesInRange);
+        } else {
+          throw new Error('saveProjectParticipantPlan is not a function');
+        }
+      } catch (err) {
+        const msg = String(err?.message || err);
+        if (msg.startsWith('CONFLICT')) {
+          // 競合はそのまま上位でハンドリング
+          throw err;
+        }
+        // フォールバック：一旦この案件の割当を全削除 → 期間分だけ再作成
+        usedFallback = true;
+        await clearAssignmentsForProject(projectId);
+        for (const [dy, arr] of Object.entries(plan)) {
+          for (const empId of arr) {
+            const dateMidnight = new Date(`${dy}T00:00:00`);
+            await setEmployeeAssignment(projectId, dateMidnight, empId);
+          }
+        }
+      }
+
+      // projects にもキャッシュ保存（一覧等で使用）
       const union = Array.from(new Set(Object.values(plan).flat()));
       await upsertProject(projectId, { participantPlan: plan, participants: union }, { by, byName });
-      Alert.alert('保存しました', '参加従業員の割当てを更新しました。');
       setProject(p => ({ ...(p || {}), participantPlan: plan, participants: union }));
+      Alert.alert('保存しました', '参加従業員の割当てを更新しました。');
     } catch (e) {
+      console.error('[save participants] error', e);
       const msg = String(e?.message || e);
       if (msg.startsWith('CONFLICT')) {
         Alert.alert('参加者の競合', '他のプロジェクトが同じ日に同じ従業員を割当済みです。\n別の従業員を選択してください。');
@@ -784,12 +794,12 @@ export default function ProjectDetailScreen({ route }) {
           <View style={tw`mt-3`}>
             <TouchableOpacity
               onPress={handleSaveParticipants}
-              disabled={empAvailLoading}
+              disabled={empAvailLoading || datesInRange.length === 0}
               activeOpacity={0.7}
-              style={tw.style('rounded p-3 items-center', empAvailLoading ? 'bg-blue-300' : 'bg-blue-600')}
+              style={tw.style('rounded p-3 items-center', (empAvailLoading || datesInRange.length === 0) ? 'bg-blue-300' : 'bg-blue-600')}
             >
               <Text style={tw`text-white font-bold`}>
-                {empAvailLoading ? '判定中…' : '参加従業員を保存'}
+                {empAvailLoading ? '判定中…' : (datesInRange.length === 0 ? '期間を設定してください' : '参加従業員を保存')}
               </Text>
             </TouchableOpacity>
           </View>
