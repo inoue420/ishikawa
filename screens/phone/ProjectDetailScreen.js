@@ -20,7 +20,6 @@ import * as ImagePicker from 'expo-image-picker';
 import {
   fetchProjectById,
   fetchAllUsers,
-  fetchMaterialsRecords,
   fetchMaterialUsages,
   fetchMaterialsList,
   uploadProjectPhoto,
@@ -48,30 +47,6 @@ import {
   clearAssignmentsForProject,
 } from '../../firestoreService';
 import { Timestamp } from 'firebase/firestore';
-
- // ===== デバッグ補助 =====
- const debugLogList = (place, logs, ctx) => {
-   try {
-    console.log(
-      `[LOGS:${place}] projectId=${ctx?.projectId} date=${ctx?.date} tz=${Intl.DateTimeFormat().resolvedOptions().timeZone}`
-    );
-     console.log(`[LOGS:${place}] count=`, logs?.length ?? 0);
-     (logs || []).slice(0, 20).forEach((l, i) => {
-       console.log(`[LOGS:${place}]#${i}`,
-         {
-           id: l?.id,
-           target: l?.target,
-           action: l?.action,
-           dateKey: l?.dateKey,          // 文字列の日付が入っているか？
-           atISO: l?.at?.toDate?.()?.toISOString?.(), // Timestamp->ISO
-           by: l?.by, byName: l?.byName,
-         }
-       );
-     });
-   } catch (e) {
-     console.log(`[LOGS:${place}] error`, e);
-   }
- };
 
 
 // 追加：Firestore Timestamp/Date を安全に Date|null へ
@@ -101,7 +76,6 @@ export default function ProjectDetailScreen({ route }) {
   const navigation = useNavigation();
   // Navigator から渡す userEmail を受け取る（未渡しでも動くように ?? {} で安全化）
   const { projectId, date, userEmail } = route.params ?? {}; // 'YYYY-MM-DD' + userEmail  // 送信者解決・ピッカー重複起動防止
-  console.log('[PDS] route params', { projectId, date, userEmail });
   const [picking, setPicking] = useState(false);
 
   // 送信者を決定するヘルパー（by=従業員ID / byName=employees.name）
@@ -135,7 +109,6 @@ export default function ProjectDetailScreen({ route }) {
   const [loading, setLoading] = useState(true);
   const [project, setProject] = useState(null);
   const [employees, setEmployees] = useState([]);
-  const [materials, setMaterials] = useState([]);
   const [usages, setUsages] = useState([]);
   const [materialsList, setMaterialsList] = useState([]);
 
@@ -224,18 +197,6 @@ export default function ProjectDetailScreen({ route }) {
           }
         } catch (e) { /* noop: me 解決失敗は致命ではない */ }
 
-        // 資材記録（当日だけ抽出）
-        const allMat = await fetchMaterialsRecords();
-        const filteredMat = allMat.filter(m => {
-          if (m.project !== projectId) return false;
-          const ts = m.timestamp.toDate();
-          const localY = ts.getFullYear();
-          const localM = String(ts.getMonth() + 1).padStart(2, '0');
-          const localD = String(ts.getDate()).padStart(2, '0');
-          const localDate = `${localY}-${localM}-${localD}`;
-          return localDate === date;
-        });
-        setMaterials(filteredMat);
 
         // 使用量・資材マスタ
         const rawUsages = await fetchMaterialUsages(projectId);
@@ -251,8 +212,6 @@ export default function ProjectDetailScreen({ route }) {
         ]);
         setPhotos(ph);
         setEditLogs(logs);
-        debugLogList('init', logs);
-        debugLogList('init', logs, { projectId, date });
         setComments(cmts);
       } catch (err) {
         console.error('❌ ProjectDetail load error:', err);
@@ -819,7 +778,6 @@ export default function ProjectDetailScreen({ route }) {
         onPress: async () => {
           try {
             const { by, byName } = await resolveCurrentUser();
-            console.log('[addEditLog] vehicles payload', { projectId, date, by, byName });
             await deleteProjectPhoto({ projectId, photoId: photo.id });
            try {
             await addEditLog({
@@ -840,10 +798,6 @@ export default function ProjectDetailScreen({ route }) {
             ]);
             setPhotos(ph);
             setEditLogs(logs);
-            debugLogList('afterDeletePhoto', logs);
-            debugLogList('afterDeletePhoto', logs, { projectId, date });
-            debugLogList('afterSaveVehicles', logs);
-            debugLogList('afterSaveVehicles', logs, { projectId, date });
           } catch (e) {
             console.error('delete error', e);
             Alert.alert('削除に失敗しました');
@@ -1069,8 +1023,6 @@ export default function ProjectDetailScreen({ route }) {
           ) : (
             comments.map(c => {
               const who = nameById[c.by] ?? c.byName ?? c.by ?? '—';
-              if (who === '—') console.log('[render comment] no name match', { by: c.by, byName: c.byName, keys: Object.keys(nameById).slice(0,5) });
-
               const when = c.at?.toDate ? c.at.toDate() : null;
               const y = when ? when.getFullYear() : '';
               const m = when ? String(when.getMonth() + 1).padStart(2, '0') : '';
@@ -1096,14 +1048,10 @@ export default function ProjectDetailScreen({ route }) {
         <View style={tw`mt-10`}>
           <Text style={tw`text-lg font-bold`}>編集履歴</Text>
           {editLogs.length === 0 ? (
-   <>
-     {console.log('[LOGS:render] empty for date', date)}
-     <Text style={tw`mt-2`}>履歴はありません</Text>
-   </>
+          <Text style={tw`mt-2`}>履歴はありません</Text>
           ) : (
             editLogs.map((log) => {
               const who = nameById[log.by] ?? log.byName ?? log.by ?? '—';
-              if (who === '—') console.log('[render log] no name match', { by: log.by, byName: log.byName, keys: Object.keys(nameById).slice(0,5) });
               const when = log.at?.toDate ? log.at.toDate() : null;
               const ymd = when
                 ? `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(2, '0')}-${String(

@@ -155,9 +155,6 @@ export default function ProjectRegisterScreen({ route }) {
     })();
   }, [route?.params?.userEmail]);
 
-  useEffect(() => {
-    if (me) console.log('[PRS] me resolved:', { id: me?.id, email: me?.email, name: me?.name, loginId: me?.loginId });
-  }, [me]);
 
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
@@ -194,10 +191,7 @@ export default function ProjectRegisterScreen({ route }) {
   // 使用不可マップ { 'YYYY-MM-DD': Set<employeeId> }
   const [unavailableEmpMap, setUnavailableEmpMap] = useState({});
   const [empAvailLoading, setEmpAvailLoading] = useState(false);
-  const employeesById = useMemo(
-    () => Object.fromEntries((employees || []).map(e => [e.id, e])),
-    [employees]
-  );
+
   // コスト算出等のため「全日合算の参加者」ユニオン配列を作る
   const participants = useMemo(() => {
     const s = new Set();
@@ -215,7 +209,6 @@ export default function ProjectRegisterScreen({ route }) {
     });
   }, [employees]);
 
-  const leftScrollRef = useRef(null);
   const leftBottomPadding = Platform.OS === 'ios' ? 160 : 160;
 
   const loadProjects = useCallback(async () => {
@@ -551,7 +544,7 @@ export default function ProjectRegisterScreen({ route }) {
       });
       setParticipantSelectionsByDay(next);
     }
-  }, [employeesById]); 
+  }, []); 
 
   // ─────────────────────────────────────────────
   // 事前入力（コピー / 編集）:
@@ -697,15 +690,6 @@ useEffect(() => {
 
     };
 
-    // （任意）未選択の注意喚起（ここではログのみ）
-    const missing = datesInRange.filter(d => {
-      const sel = vehicleSelections[toYmd(d)] || {};
-      return !sel.sales && !sel.cargo;
-    }).length;
-    if (datesInRange.length > 0 && missing > 0) {
-      // 必須にしたい場合は Alert 後 return してください
-      console.log('[PRS] vehicle not selected for', missing, 'days');
-    }    
     setLoading(true);
     try {
       // 1) 競合の最終チェック（日単位）
@@ -828,7 +812,6 @@ useEffect(() => {
     <View style={tw`flex-1`}>
       {/* 単一カラム：新規/編集フォーム */}
       <ScrollView
-        ref={leftScrollRef}
         style={tw`w-full p-3`}
         contentContainerStyle={{ paddingBottom: leftBottomPadding }}
         refreshControl={
