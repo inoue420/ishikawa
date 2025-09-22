@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import tw from 'twrnc';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 
 import {
@@ -49,6 +49,31 @@ import {
 } from '../../firestoreService';
 import { Timestamp } from 'firebase/firestore';
 
+ // ===== デバッグ補助 =====
+ const debugLogList = (place, logs, ctx) => {
+   try {
+    console.log(
+      `[LOGS:${place}] projectId=${ctx?.projectId} date=${ctx?.date} tz=${Intl.DateTimeFormat().resolvedOptions().timeZone}`
+    );
+     console.log(`[LOGS:${place}] count=`, logs?.length ?? 0);
+     (logs || []).slice(0, 20).forEach((l, i) => {
+       console.log(`[LOGS:${place}]#${i}`,
+         {
+           id: l?.id,
+           target: l?.target,
+           action: l?.action,
+           dateKey: l?.dateKey,          // 文字列の日付が入っているか？
+           atISO: l?.at?.toDate?.()?.toISOString?.(), // Timestamp->ISO
+           by: l?.by, byName: l?.byName,
+         }
+       );
+     });
+   } catch (e) {
+     console.log(`[LOGS:${place}] error`, e);
+   }
+ };
+
+
 // 追加：Firestore Timestamp/Date を安全に Date|null へ
 const toDateMaybe = (v) => {
   if (!v) return null;
@@ -76,6 +101,7 @@ export default function ProjectDetailScreen({ route }) {
   const navigation = useNavigation();
   // Navigator から渡す userEmail を受け取る（未渡しでも動くように ?? {} で安全化）
   const { projectId, date, userEmail } = route.params ?? {}; // 'YYYY-MM-DD' + userEmail  // 送信者解決・ピッカー重複起動防止
+  console.log('[PDS] route params', { projectId, date, userEmail });
   const [picking, setPicking] = useState(false);
 
   // 送信者を決定するヘルパー（by=従業員ID / byName=employees.name）
@@ -225,6 +251,8 @@ export default function ProjectDetailScreen({ route }) {
         ]);
         setPhotos(ph);
         setEditLogs(logs);
+        debugLogList('init', logs);
+        debugLogList('init', logs, { projectId, date });
         setComments(cmts);
       } catch (err) {
         console.error('❌ ProjectDetail load error:', err);
@@ -471,41 +499,20 @@ export default function ProjectDetailScreen({ route }) {
       [ymd]: { ...(prev[ymd] || {}), [type]: vehicleId || undefined }
     }));
   };
-  // --- 保存前・競合チェック（日単位） ---
-  const checkVehicleConflicts = useCallback(async (selections, dates, selfProjectId) => {
-    if (!dates?.length) return [];
-    const s = dates[0];
-    const e = dates[dates.length - 1];
-    const startTs = Timestamp.fromDate(new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0,0,0,0));
-    const endTs   = Timestamp.fromDate(new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23,59,59,999));
-    const reservations = await fetchReservationsInRange(startTs, endTs);
-    const conflicts = [];
-    for (const d of dates) {
-      const ymd = toYmd(d);
-      const sel = selections[ymd] || {};
-      for (const t of ['sales','cargo']) {
-        const vid = sel[t];
-        if (!vid) continue;
-        const hit = reservations.find(r => {
-          const rYmd = toYmd(r.date?.toDate?.() ?? new Date(r.date));
-          const other = !selfProjectId || r.projectId !== selfProjectId;
-          return other && r.vehicleId === vid && rYmd === ymd;
-        });
-        if (hit) conflicts.push({ date: ymd, vehicleId: vid });
-      }
-    }
-    return conflicts;
-  }, []);
-
+  // ※ 競合チェックは saveProjectVehiclePlan / saveProjectParticipantPlan 内でTx検証される前提。
+  //   未使用の checkVehicleConflicts は削除（fetchReservationsInRange 未インポートのため将来の誤用を防止）。
   const handleSaveVehicles = async () => {
     try {
       const { by, byName } = await resolveCurrentUser();
-      // 0) 保存ペイロード生成
+      // 0) 保存ペイロード生成（全日付キーを必ず含める：nullはクリア指示）
       const vehiclePlan = {};
-      Object.entries(vehicleSelections || {}).forEach(([ymd, sel]) => {
-        const salesId = sel?.sales || null;
-        const cargoId = sel?.cargo || null;
-        if (salesId || cargoId) vehiclePlan[ymd] = { sales: salesId, cargo: cargoId };
+      (datesInRange || []).forEach((d) => {
+        const ymd = toYmd(d);
+        const sel = vehicleSelections?.[ymd] || {};
+        vehiclePlan[ymd] = {
+          sales: sel?.sales ?? null,
+          cargo: sel?.cargo ?? null,
+        };
       });
 
 
@@ -513,6 +520,43 @@ export default function ProjectDetailScreen({ route }) {
       await saveProjectVehiclePlan(projectId, vehiclePlan, datesInRange);
       // 2) プロジェクト側のキャッシュを更新
       await upsertProject(projectId, { vehiclePlan }, { by, byName });
+      // 3) サーバ状態から再読込してUIへ確実に反映
+      try {
+        const mine = await fetchReservationsForProject(projectId);
+        const next = {};
+        for (const r of mine) {
+          const dy = r.dateKey || toYmd(r.date?.toDate?.() ?? new Date(r.date));
+          const v  = vehiclesById[r.vehicleId];
+          const t  = (v?.vehicleType || 'sales'); // 'sales' | 'cargo'
+          next[dy] = { ...(next[dy] || {}), [t]: r.vehicleId };
+        }
+        // 予約が無い日は null で埋めてローカルもクリア
+        (datesInRange || []).forEach((d) => {
+          const dy = toYmd(d);
+          const sel = next[dy] || {};
+          next[dy] = { sales: sel.sales ?? null, cargo: sel.cargo ?? null };
+        });
+        setVehicleSelections(next);
+      } catch (re) {
+        console.log('[reload reservations after save] error', re);
+      }
+      // 4) 編集履歴（失敗しても保存は成功にする）
+      try {
+        await addEditLog({
+          projectId,
+          date,
+          dateKey: date,
+          action: 'update',
+          target: 'vehicles',
+          targetId: null,
+          by,
+          byName
+        });
+        const logs = await fetchEditLogs(projectId, date);
+        setEditLogs(logs);
+      } catch (logErr) {
+        console.log('[vehicles addEditLog] error', logErr);
+      } 
       Alert.alert('保存しました', '車両割当てを更新しました。');
       // ローカル state も同期
       setProject(p => ({ ...(p || {}), vehiclePlan }));
@@ -530,11 +574,14 @@ export default function ProjectDetailScreen({ route }) {
   const handleSaveParticipants = async () => {
     try {
       const { by, byName } = await resolveCurrentUser();
-      // 画面上の選択 → 保存ペイロード { ymd: string[] }
+      console.log('[addEditLog] participants payload', { projectId, date, by, byName });
+      // 画面上の選択 → 保存ペイロード { ymd: string[] }（全日付キーを必ず含め、空配列はクリア指示）
       const plan = {};
-      Object.entries(participantSelections || {}).forEach(([dy, set]) => {
-        const arr = Array.isArray(set) ? set : Array.from(set || []);
-        if (arr.length) plan[dy] = arr;
+      (datesInRange || []).forEach((d) => {
+        const dy = toYmd(d);
+        const selected = participantSelections?.[dy];
+        const arr = Array.isArray(selected) ? selected : Array.from(selected || []);
+        plan[dy] = arr; // 空配列ならその日の割当をクリア
       });
       // まずはトランザクションAPI（推奨）
       let usedFallback = false;
@@ -565,6 +612,44 @@ export default function ProjectDetailScreen({ route }) {
       const union = Array.from(new Set(Object.values(plan).flat()));
       await upsertProject(projectId, { participantPlan: plan, participants: union }, { by, byName });
       setProject(p => ({ ...(p || {}), participantPlan: plan, participants: union }));
+      // 実際に保存された割当を再読込してUIへ確実に反映
+      try {
+        const mine = await fetchAssignmentsForProject(projectId);
+        const next = {};
+        for (const r of mine) {
+          const dy = r.dateKey || toYmd(r.date?.toDate?.() ?? new Date(r.date));
+          const s = new Set(next[dy] || []);
+          s.add(r.employeeId);
+          next[dy] = s;
+        }
+        // 割当が無い日は空Setで埋め、UI側でも未選択を可視化
+        (datesInRange || []).forEach((d) => {
+          const dy = toYmd(d);
+          next[dy] = next[dy] || new Set();
+        });
+        setParticipantSelections(next);
+      } catch (re) {
+        console.log('[reload assignments after save] error', re);
+      }
+      // 編集履歴（失敗しても保存は成功にする）
+      try {
+        await addEditLog({
+          projectId,
+          date,
+          dateKey: date,          // 念のため dateKey も付与（fetch 側がどちらで見ていてもヒット）
+          action: 'update',
+          target: 'participants',
+          targetId: null,         // ★ 重要：undefinedを避ける
+          by,
+          byName
+        });
+        const logs = await fetchEditLogs(projectId, date);
+        setEditLogs(logs);
+        debugLogList('afterSaveParticipants', logs);
+        debugLogList('afterSaveParticipants', logs, { projectId, date });
+      } catch (logErr) {
+        console.log('[participants addEditLog] error', logErr);
+      } 
       Alert.alert('保存しました', '参加従業員の割当てを更新しました。');
     } catch (e) {
       console.error('[save participants] error', e);
@@ -587,6 +672,7 @@ export default function ProjectDetailScreen({ route }) {
         params: {
           mode: 'edit',
           projectId: src?.id,
+          date,
           userEmail: userEmail ?? null,
           initialValues: {
             name: src.name ?? null,
@@ -619,6 +705,7 @@ export default function ProjectDetailScreen({ route }) {
         screen: 'ProjectRegister',
         params: {
           mode: 'copy',
+          date,
           userEmail: userEmail ?? null,
           initialValues: {
             name: src.name ?? null,
@@ -689,6 +776,39 @@ export default function ProjectDetailScreen({ route }) {
     });
   }, [navigation, openActionMenu]);
 
+  // 編集画面から戻って来たときに「プロジェクト本体＋履歴」を最新化
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        try {
+          const [proj, logs] = await Promise.all([
+            fetchProjectById(projectId),
+            fetchEditLogs(projectId, date),
+          ]);
+          if (cancelled) return;
+          setProject(proj);
+          setEditLogs(logs);
+          debugLogList('focus', logs);
+          debugLogList('focus', logs, { projectId, date });
+          // 画面の即時一貫性のため、プロジェクトにキャッシュされた計画で一旦プレフィル
+          if (proj?.participantPlan && Object.keys(proj.participantPlan).length) {
+            const next = {};
+            Object.entries(proj.participantPlan).forEach(([dy, arr]) => next[dy] = new Set(arr || []));
+            setParticipantSelections(next);
+          }
+          if (proj?.vehiclePlan && Object.keys(proj.vehiclePlan).length) {
+            setVehicleSelections(proj.vehiclePlan);
+          }
+          // ※ 空き状況/予約の再評価は projStart/projEnd 変化で既存 useEffect が自動実行
+        } catch (e) {
+          console.log('[focus -> reload project & logs] error', e);
+        }
+      })();
+      return () => { cancelled = true; };
+    }, [projectId, date])
+  );
+
   // 画像削除（一覧から個別削除）
   const handleDeletePhoto = async (photo) => {
     Alert.alert('削除しますか？', 'この写真を削除します。', [
@@ -699,7 +819,20 @@ export default function ProjectDetailScreen({ route }) {
         onPress: async () => {
           try {
             const { by, byName } = await resolveCurrentUser();
+            console.log('[addEditLog] vehicles payload', { projectId, date, by, byName });
             await deleteProjectPhoto({ projectId, photoId: photo.id });
+           try {
+            await addEditLog({
+              projectId,
+              date,
+              dateKey: date,
+              action: 'delete',
+              target: 'photo',
+              targetId: null,
+              by,
+              byName
+            });
+           } catch(e) { console.log('[addEditLog photo delete] error', e); }
 
             const [ph, logs] = await Promise.all([
               listProjectPhotos(projectId, date),
@@ -707,6 +840,10 @@ export default function ProjectDetailScreen({ route }) {
             ]);
             setPhotos(ph);
             setEditLogs(logs);
+            debugLogList('afterDeletePhoto', logs);
+            debugLogList('afterDeletePhoto', logs, { projectId, date });
+            debugLogList('afterSaveVehicles', logs);
+            debugLogList('afterSaveVehicles', logs, { projectId, date });
           } catch (e) {
             console.error('delete error', e);
             Alert.alert('削除に失敗しました');
@@ -959,7 +1096,10 @@ export default function ProjectDetailScreen({ route }) {
         <View style={tw`mt-10`}>
           <Text style={tw`text-lg font-bold`}>編集履歴</Text>
           {editLogs.length === 0 ? (
-            <Text style={tw`mt-2`}>履歴はありません</Text>
+   <>
+     {console.log('[LOGS:render] empty for date', date)}
+     <Text style={tw`mt-2`}>履歴はありません</Text>
+   </>
           ) : (
             editLogs.map((log) => {
               const who = nameById[log.by] ?? log.byName ?? log.by ?? '—';
@@ -974,11 +1114,17 @@ export default function ProjectDetailScreen({ route }) {
                 ? `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`
                 : '';
               const actionJa = log.action === 'add' ? '追加' : log.action === 'delete' ? '削除' : log.action;
+              const targetLabel =
+                log.target === 'vehicles' ? '車両'
+                : log.target === 'participants' ? '参加従業員'
+                : log.target === 'photo' ? '写真'
+                : log.target === 'project' ? 'プロジェクト'
+                : (log.target || '—'); 
               return (
                 <View key={log.id} style={tw`mt-2`}>
                   <Text>編集者: {who}</Text>
                   <Text>編集(保存)日時: {ymd} {hms}</Text>
-                  <Text>対象: 写真 / 操作: {actionJa}</Text>
+                  <Text>対象: {targetLabel} / 操作: {actionJa}</Text>
                 </View>
               );
             })

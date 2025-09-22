@@ -18,6 +18,7 @@ import {
   fetchAllUsers,
   findEmployeeByIdOrEmail,
   fetchProjectsOverlappingRange,
+  addEditLog,
 } from '../../firestoreService';
 import {
   fetchVehicles,
@@ -166,6 +167,13 @@ export default function ProjectRegisterScreen({ route }) {
   const [showEndPicker, setShowEndPicker] = useState(false);
   const [showStartTimePicker, setShowStartTimePicker] = useState(false);
   const [showEndTimePicker, setShowEndTimePicker] = useState(false);
+
+  // ログに使う日付（PDSから来たdate > なければ開始日のYMD）
+  const dateForLog = useMemo(() => {
+    const d = route?.params?.date;
+    if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+    return startDate ? toYmd(startDate) : null;
+  }, [route?.params?.date, startDate]);
 
   // 金額・面積など
   const [orderAmount, setOrderAmount] = useState('');
@@ -740,6 +748,22 @@ useEffect(() => {
             );
           }
         }
+       // 🔎 編集ログ（この画面の保存＝プロジェクト編集）
+       try {
+         if (dateForLog) {
+           await addEditLog({
+             projectId: editingProjectId,
+             date: dateForLog,
+             dateKey: dateForLog,
+             target: 'project',
+             action: 'update',
+             targetId: null,
+             by: actor.by, byName: actor.byName,
+           });
+         }
+       } catch (e) {
+         console.log('[PRS addEditLog(edit)] error', e);
+       }        
         await loadProjects();
         Alert.alert('成功', 'プロジェクトを更新しました');
         setEditingProjectId(null);
