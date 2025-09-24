@@ -119,15 +119,14 @@ export default function InvoiceEditorScreen() {
     }
   }, [calcItems, subtotal, tax, total, taxRate, invoiceNo]);
 
-  const exportPDF = useCallback(async () => {
-    try {
-      // 超簡易テンプレ（後で請求書テンプレに差し替え）
-      const rows = calcItems.map(it => {
-        const qty = it.qty || '';
-        const unit = it.unit || '';
-        const unitPrice = fmt(it.unitPrice || 0);
-        const amount = fmt(it.amount || 0);
-        return `
+  // ---- PDF HTMLを構築（プレビュー/エクスポート共通）----
+  const buildPdfHtml = useCallback(() => {
+    const rows = calcItems.map(it => {
+      const qty = it.qty || '';
+      const unit = it.unit || '';
+      const unitPrice = fmt(it.unitPrice || 0);
+      const amount = fmt(it.amount || 0);
+      return `
         <tr>
           <td style="text-align:center">${it.no}</td>
           <td>${esc(it.name||'')}</td>
@@ -136,11 +135,11 @@ export default function InvoiceEditorScreen() {
           <td style="text-align:right">${unitPrice}</td>
           <td style="text-align:right">${amount}</td>
         </tr>`;
-      }).join('');
-      const subtotalStr = fmt(subtotal);
-      const taxStr = fmt(tax);
-      const totalStr = fmt(total)
-      const html = `
+    }).join('');
+    const subtotalStr = fmt(subtotal);
+    const taxStr = fmt(tax);
+    const totalStr = fmt(total);
+    return `
       <html><head>
         <meta charset="utf-8" />
         <style>
@@ -175,21 +174,31 @@ export default function InvoiceEditorScreen() {
           <div>${esc(company.bankLine)}</div>
         </div>
       </body></html>`;
-      const file = await printToFileAsync({ html });
-      // ファイル名を請求書番号に
-      const pdfName = `${(invoiceNo || 'invoice')}.pdf`;
-      const targetUri = FileSystem.documentDirectory + pdfName;
-      try {
-        await FileSystem.moveAsync({ from: file.uri, to: targetUri });
-        await Sharing.shareAsync(targetUri);
-      } catch {
-        // 失敗時は元のURIで共有
-        await Sharing.shareAsync(file.uri);
-      }
+  }, [calcItems, clientName, issueDate, invoiceNo, subtotal, tax, total, company]);
+
+  // ---- PDF生成（URIを返す）----
+  const generatePDF = useCallback(async () => {
+    const html = buildPdfHtml();
+    const file = await printToFileAsync({ html });
+    const pdfName = `${(invoiceNo || 'invoice')}.pdf`;
+    const targetUri = FileSystem.documentDirectory + pdfName;
+    try {
+      await FileSystem.moveAsync({ from: file.uri, to: targetUri });
+      return targetUri;
+    } catch {
+      return file.uri;
+    }
+  }, [buildPdfHtml, invoiceNo]);
+
+  // ---- 共有（従来の「PDFエクスポート」）----
+  const exportPDF = useCallback(async () => {
+    try {
+      const uri = await generatePDF();
+      await Sharing.shareAsync(uri);
     } catch (e) {
       Alert.alert('PDF出力失敗', 'PDFの作成に失敗しました。');
     }
-  }, [calcItems, clientName, issueDate, invoiceNo, subtotal, tax, total, company]);
+  }, [generatePDF]);
   return (
     <ScrollView style={tw`flex-1 bg-white`} contentContainerStyle={tw`p-4`}>
       <View style={tw`mb-4`}>
@@ -298,6 +307,23 @@ export default function InvoiceEditorScreen() {
       <View style={tw`mt-6 flex-row gap-3`}>
         <TouchableOpacity onPress={exportCSV} style={tw`border rounded px-4 py-3`}>
           <Text>CSVエクスポート</Text>
+        </TouchableOpacity>
+        {/* 追加：アプリ内プレビュー */}
+        <TouchableOpacity
+          onPress={async () => {
+            try {
+              const uri = await generatePDF();
+              navigation.navigate('PDFPreview', {
+                pdfUri: uri,
+                fileName: `${(invoiceNo || 'invoice')}.pdf`,
+              });
+            } catch (e) {
+              Alert.alert('プレビュー失敗', 'PDFの生成に失敗しました。');
+            }
+          }}
+          style={tw`border rounded px-4 py-3`}
+        >
+          <Text>プレビュー</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={exportPDF} style={tw`border rounded px-4 py-3`}>
           <Text>PDFエクスポート</Text>
