@@ -7,6 +7,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { fetchProjectById } from '../../firestoreService';
 import { printToFileAsync } from 'expo-print';
+import { Asset } from 'expo-asset';
 
 const DEFAULT_COMPANY = {
   issuerName: '株式会社石川組',
@@ -42,7 +43,7 @@ export default function InvoiceEditorScreen() {
   const [clientName, setClientName] = useState('　御中');
   const [invoiceNo, setInvoiceNo] = useState(() => {
     const d = new Date();
-    return `INV-${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${d.getHours()}${String(d.getMinutes()).padStart(2,'0')}`;
+    return `INV-${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`;
   });
   const [issueDate, setIssueDate] = useState(() => {
     const d = new Date();
@@ -53,6 +54,26 @@ export default function InvoiceEditorScreen() {
   const [title] = useState('請　求　書');
   const [items, setItems] = useState([{ no: 1, name: '工事費 一式', qty: '1', unit: '式', unitPrice: '0', amount: 0 }]);
 
+  // --- ロゴ（Base64 data URI） ---
+  const [logoTeam, setLogoTeam] = useState(null);
+  const [logoSymbol, setLogoSymbol] = useState(null);
+
+  useEffect(() => {
+    // 画像アセットをBase64にして埋め込み
+    (async () => {
+      try {
+        const teamAsset   = Asset.fromModule(require('../../../assets/branding/ikg-team.png'));
+        const symbolAsset = Asset.fromModule(require('../../../assets/branding/ishikawa-symbol.png'));
+        await Promise.all([teamAsset.downloadAsync(), symbolAsset.downloadAsync()]);
+        const teamB64   = await FileSystem.readAsStringAsync(teamAsset.localUri ?? teamAsset.uri,   { encoding: FileSystem.EncodingType.Base64 });
+        const symbolB64 = await FileSystem.readAsStringAsync(symbolAsset.localUri ?? symbolAsset.uri,{ encoding: FileSystem.EncodingType.Base64 });
+        setLogoTeam(`data:image/png;base64,${teamB64}`);
+        setLogoSymbol(`data:image/png;base64,${symbolB64}`);
+      } catch (_) {
+        // ロゴ未設定でもPDF生成は継続
+      }
+    })();
+  }, []);
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -152,69 +173,97 @@ export default function InvoiceEditorScreen() {
         <meta charset="utf-8" />
         <style>
           @page { size: A4; margin: 16mm; }
-          body { font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", sans-serif; font-size:12px; color:#111; }
-          h1 { font-size:22px; letter-spacing: 0.25em; text-align:center; margin: 0 0 12px; }
-          .flex { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; }
-          .to { font-size:16px; padding:4px 0 8px; }
-          .company { text-align:right; line-height:1.6; }
-          .company .name { font-size:14px; font-weight:600; }
-          .note { margin:6px 0 10px; }
-          .meta { display:flex; justify-content:flex-end; gap:24px; margin:0 0 10px; }
-          .hero { display:flex; justify-content:flex-end; margin:6px 0 12px; }
-          .hero .box { border:1.5px solid #000; padding:8px 12px; display:flex; align-items:center; gap:16px; }
-          .hero .label { letter-spacing: .35em; font-weight:700; }
-          .hero .value { font-size:22px; font-weight:700; }
-          table { width:100%; border-collapse: collapse; table-layout: fixed; }
-          thead { display: table-header-group; }
-          th, td { border:1px solid #999; padding:6px; vertical-align:top; }
-          th { background:#f5f5f5; }
-          .no { width: 8%; }
-          .name { width: 42%; }
-          .qty { width: 10%; }
-          .unit { width: 10%; }
-          .price { width: 15%; }
-          .amount { width: 15%; }
-          .r { text-align:right; } .c { text-align:center; } .l { text-align:left; }
-          .totals { margin-top:12px; display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
-          .totals .row { display:flex; gap:28px; }
-          .bank { margin-top:16px; }
+          /* A4幅相当（96dpi想定）で固定：列幅を安定化 */
+          body { width: 794px; margin: 0 auto; font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans CJK JP", sans-serif; font-size:12px; color:#000; }
+          .invoice-title { text-align:center; font-size:32px; font-weight:bold; color:#00a5e3; letter-spacing:.5em; margin:40px 0 10px; }
+          .horizontal-line { width:100%; border-top:1px solid #8e8e8e; margin-bottom:15px; }
+          .header-row { display:flex; justify-content:space-between; margin-bottom:15px; }
+          .header-left { width:50%; }
+          .recipient { font-size:28px; font-weight:bold; margin-bottom:5px; }
+          .message { font-size:12px; }
+          .header-right { width:50%; text-align:right; }
+          .date { font-size:12px; margin-bottom:8px; }
+          .logo-container { display:flex; justify-content:flex-end; align-items:flex-start; gap:8px; margin-bottom:5px; }
+          .company-info { font-size:12px; line-height:1.4; }
+          .amount-section { border:1px solid #000; padding:6px 10px; margin:6px 0 3px; display:flex; justify-content:space-between; align-items:center; }
+          .amount-label { font-size:18px; font-weight:bold; letter-spacing:.4em; }
+          .amount-value { font-size:20px; font-weight:bold; }
+          .bank-info { font-size:12px; margin-bottom:15px; }
+          table { width:100%; border-collapse:collapse; }
+          th, td { border:1px solid #000; padding:4px; font-size:12px; vertical-align:middle; }
+          th { background:#00a5e3; color:#fff; text-align:center; font-weight:bold; }
+          tbody td { text-align:center; }
+          /* 明細セルの左右揃え・等幅数字・折り返し */
+          .l{ text-align:left; } .r{ text-align:right; } .c{ text-align:center; }
+          .qty,.price,.amount{ font-variant-numeric: tabular-nums; }
+          .name{ white-space: pre-wrap; }
+          /* 改ページの安定：ヘッダ固定/行分割防止 */
+          thead{ display: table-header-group; }
+          tfoot{ display: table-row-group; }
+          tr{ page-break-inside: avoid; }          
+          tbody tr:nth-child(even) { background:#e8f7fb; }
+          .no-col{width:6%}.content-col{width:40%;text-align:left}.qty-col{width:8%}.unit-col{width:8%}.unit-price-col{width:14%}.amount-col{width:24%}
+          tfoot td { border:1px solid #000; padding:4px; font-size:12px; }
+          tfoot .label { text-align:right; font-weight:bold; }
+          tfoot .value { text-align:right; }
+          tfoot tr.total .value { background:#00a5e3; color:#fff; }
         </style>
       </head><body>
-        <h1>請　求　書</h1>
-        <div class="flex">
-          <div class="to">${esc(clientName)}</div>
-          <div class="company">
-            <div class="name">${esc(company.issuerName)}</div>
-            <div>${esc(company.issuerPostal)}　${esc(company.issuerAddress)}</div>
-            <div>${esc(company.issuerTel)}　${esc(company.issuerFax)}</div>
-            <div>${esc(company.issuerReg)}</div>
+        <div class="invoice-title">請 求 書</div>
+        <div class="horizontal-line"></div>
+        <div class="header-row">
+          <div class="header-left">
+            <div class="recipient">${esc(clientName)}</div>
+            <div class="message">下記の通り、御請求申し上げます。</div>
+          </div>
+          <div class="header-right">
+            <div class="date">発行日：${esc(toJpDate(issueDate))}　請求書番号：${esc(invoiceNo)}</div>
+            <div class="logo-container">
+              ${logoTeam   ? `<img src="${logoTeam}"   alt="TEAM ISHIKAWA" style="height:55px" />` : ''}
+            </div>
+            <div class="logo-container">
+              ${logoSymbol ? `<img src="${logoSymbol}" alt="Ishikawa Symbol" style="height:22px" />` : ''}
+            </div>
+            <div class="company-info">
+              ${esc(company.issuerName)}<br/>
+              ${esc(company.issuerPostal)} ${esc(company.issuerAddress)}<br/>
+              ${esc(company.issuerTel)}　${esc(company.issuerFax)}<br/>
+              ${esc(company.issuerReg)}
+            </div>
           </div>
         </div>
-        <div class="note">下記の通り、御請求申し上げます。</div>
-        <div class="meta">
-          <div>日付：${toJpDate(issueDate)}</div>
-          <div>請求書番号：${esc(invoiceNo)}</div>
+        <div class="amount-section">
+          <div class="amount-label">請 求 金 額</div>
+          <div class="amount-value" style="font-variant-numeric: tabular-nums;">¥${totalStr}</div>
         </div>
-        <div class="hero">
-          <div class="box">
-            <div class="label">請 求 金 額</div>
-            <div class="value">¥${totalStr}</div>
-          </div>
-        </div>
+        <div class="bank-info">${esc(company.bankLine)}</div>
         <table>
           <thead>
-            <tr><th class="no">No.</th><th class="name">内容</th><th class="qty">数量</th><th class="unit">単位</th><th class="price">単価</th><th class="amount">金額</th></tr>
+            <tr>
+              <th class="no-col">No.</th>
+              <th class="content-col">内容</th>
+              <th class="qty-col">数量</th>
+              <th class="unit-col">単位</th>
+              <th class="unit-price-col">単価</th>
+              <th class="amount-col">金額</th>
+            </tr>          
           </thead>
           <tbody>${rows}</tbody>
+          <tfoot>
+            <tr>
+              <td colspan="4"></td><td class="label">小計</td><td class="value">¥${subtotalStr}</td>
+            </tr>
+            <tr>
+              <td colspan="4"></td><td class="label">消費税&nbsp;@${(Number(taxRate||0)*100).toFixed(2)}%</td>
+              <td class="value">¥${taxStr}</td>
+            </tr>
+            <tr class="total">
+              <td colspan="4"></td><td class="label">合計</td><td class="value">¥${totalStr}</td>
+            </tr>
+          </tfoot>
         </table>
-        <div class="totals">
-          <div class="row"><div>小計</div><div class="r">¥${subtotalStr}</div></div>
-          <div class="row"><div>消費税 @ ${taxPct}%</div><div class="r">¥${taxStr}</div></div>
-          <div class="row" style="font-size:14px;font-weight:700;"><div>合計</div><div class="r">¥${totalStr}</div></div>
-        </div>
-        <div class="bank">${esc(company.bankLine)}</div>
       </body></html>`;
-  }, [calcItems, clientName, issueDate, invoiceNo, subtotal, tax, total, company, taxRate]);
+  }, [calcItems, clientName, issueDate, invoiceNo, subtotal, tax, total, company, taxRate, logoTeam, logoSymbol]);
 
   // ---- PDF生成（URIを返す）----
   const generatePDF = useCallback(async () => {
