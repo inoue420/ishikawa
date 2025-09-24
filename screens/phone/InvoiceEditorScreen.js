@@ -24,6 +24,13 @@ const esc = (s='') => String(s)
   .replace(/>/g,'&gt;')
   .replace(/"/g,'&quot;')
   .replace(/'/g,'&#39;');
+// 日付を「YYYY年M月D日」に整形（issueDateがYYYY-MM-DDの場合に最適化）
+const toJpDate = (s='') => {
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+  if (m) return `${m[1]}年${Number(m[2])}月${Number(m[3])}日`;
+  const d = new Date(s || Date.now());
+  return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;
+};  
   
 export default function InvoiceEditorScreen() {
   const route = useRoute();
@@ -128,53 +135,86 @@ export default function InvoiceEditorScreen() {
       const amount = fmt(it.amount || 0);
       return `
         <tr>
-          <td style="text-align:center">${it.no}</td>
-          <td>${esc(it.name||'')}</td>
-          <td style="text-align:right">${qty}</td>
-          <td style="text-align:center">${esc(unit)}</td>
-          <td style="text-align:right">${unitPrice}</td>
-          <td style="text-align:right">${amount}</td>
+          <td class="c no">${it.no}</td>
+          <td class="l name">${esc(it.name||'')}</td>
+          <td class="r qty">${qty}</td>
+          <td class="c unit">${esc(unit)}</td>
+          <td class="r price">¥${unitPrice}</td>
+          <td class="r amount">¥${amount}</td>
         </tr>`;
     }).join('');
     const subtotalStr = fmt(subtotal);
     const taxStr = fmt(tax);
     const totalStr = fmt(total);
+    const taxPct = (Number(taxRate||0) * 100).toFixed(2);
     return `
       <html><head>
         <meta charset="utf-8" />
         <style>
           @page { size: A4; margin: 16mm; }
-          body { font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", sans-serif; font-size:12px; }
-          h1 { font-size:20px; text-align:center; margin: 0 0 12px; }
-          table { width:100%; border-collapse: collapse; }
-          th, td { border:1px solid #999; padding:6px; }
-          th { background:#f2f2f2; }
-          .right { text-align:right; }
+          body { font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", sans-serif; font-size:12px; color:#111; }
+          h1 { font-size:22px; letter-spacing: 0.25em; text-align:center; margin: 0 0 12px; }
+          .flex { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; }
+          .to { font-size:16px; padding:4px 0 8px; }
+          .company { text-align:right; line-height:1.6; }
+          .company .name { font-size:14px; font-weight:600; }
+          .note { margin:6px 0 10px; }
+          .meta { display:flex; justify-content:flex-end; gap:24px; margin:0 0 10px; }
+          .hero { display:flex; justify-content:flex-end; margin:6px 0 12px; }
+          .hero .box { border:1.5px solid #000; padding:8px 12px; display:flex; align-items:center; gap:16px; }
+          .hero .label { letter-spacing: .35em; font-weight:700; }
+          .hero .value { font-size:22px; font-weight:700; }
+          table { width:100%; border-collapse: collapse; table-layout: fixed; }
+          thead { display: table-header-group; }
+          th, td { border:1px solid #999; padding:6px; vertical-align:top; }
+          th { background:#f5f5f5; }
+          .no { width: 8%; }
+          .name { width: 42%; }
+          .qty { width: 10%; }
+          .unit { width: 10%; }
+          .price { width: 15%; }
+          .amount { width: 15%; }
+          .r { text-align:right; } .c { text-align:center; } .l { text-align:left; }
+          .totals { margin-top:12px; display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
+          .totals .row { display:flex; gap:28px; }
+          .bank { margin-top:16px; }
         </style>
       </head><body>
         <h1>請　求　書</h1>
-        <div>宛先：${esc(clientName)}</div>
-        <div>発行日：${issueDate}　請求書番号：${esc(invoiceNo)}</div>
-        <hr/>
+        <div class="flex">
+          <div class="to">${esc(clientName)}</div>
+          <div class="company">
+            <div class="name">${esc(company.issuerName)}</div>
+            <div>${esc(company.issuerPostal)}　${esc(company.issuerAddress)}</div>
+            <div>${esc(company.issuerTel)}　${esc(company.issuerFax)}</div>
+            <div>${esc(company.issuerReg)}</div>
+          </div>
+        </div>
+        <div class="note">下記の通り、御請求申し上げます。</div>
+        <div class="meta">
+          <div>日付：${toJpDate(issueDate)}</div>
+          <div>請求書番号：${esc(invoiceNo)}</div>
+        </div>
+        <div class="hero">
+          <div class="box">
+            <div class="label">請 求 金 額</div>
+            <div class="value">¥${totalStr}</div>
+          </div>
+        </div>
         <table>
           <thead>
-            <tr><th>No</th><th>内容</th><th>数量</th><th>単位</th><th>単価</th><th>金額</th></tr>
+            <tr><th class="no">No.</th><th class="name">内容</th><th class="qty">数量</th><th class="unit">単位</th><th class="price">単価</th><th class="amount">金額</th></tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
-        <div class="right" style="margin-top:12px">
-          小計：${subtotalStr}　消費税：${taxStr}　
-          <strong>合計：${totalStr}</strong>
+        <div class="totals">
+          <div class="row"><div>小計</div><div class="r">¥${subtotalStr}</div></div>
+          <div class="row"><div>消費税 @ ${taxPct}%</div><div class="r">¥${taxStr}</div></div>
+          <div class="row" style="font-size:14px;font-weight:700;"><div>合計</div><div class="r">¥${totalStr}</div></div>
         </div>
-        <div style="margin-top:16px">
-          <div>${esc(company.issuerName)}</div>
-          <div>${esc(company.issuerPostal)}　${esc(company.issuerAddress)}</div>
-          <div>${esc(company.issuerTel)}　${esc(company.issuerFax)}</div>
-          <div>${esc(company.issuerReg)}</div>
-          <div>${esc(company.bankLine)}</div>
-        </div>
+        <div class="bank">${esc(company.bankLine)}</div>
       </body></html>`;
-  }, [calcItems, clientName, issueDate, invoiceNo, subtotal, tax, total, company]);
+  }, [calcItems, clientName, issueDate, invoiceNo, subtotal, tax, total, company, taxRate]);
 
   // ---- PDF生成（URIを返す）----
   const generatePDF = useCallback(async () => {
