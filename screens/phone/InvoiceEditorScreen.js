@@ -22,6 +22,8 @@ export default function InvoiceEditorScreen() {
   const route = useRoute();
   const navigation = useNavigation();
   const projectId = route?.params?.projectId ?? null;
+  const stage = route?.params?.stage ?? null;
+  const billingAmountParam = route?.params?.billingAmount ?? null;   
 
   const [clientName, setClientName] = useState('　御中');
   const [invoiceNo, setInvoiceNo] = useState(() => {
@@ -45,7 +47,12 @@ export default function InvoiceEditorScreen() {
         const p = await fetchProjectById(projectId);
         if (!alive || !p) return;
         const guess = p?.title || p?.name || p?.projectName || '工事費 一式';
-        setItems([{ no: 1, name: guess, qty: '1', unit: '式', unitPrice: String(p?.budget ?? '0'), amount: 0 }]);
+        // 受注金額(orderAmount) を最優先で単価に使用
+        const projectAmount = p?.orderAmount ?? p?.invoiceAmount ?? p?.amount ?? p?.budget ?? 0;
+        // 出来高請求で来た場合は billingAmount を優先
+        const seedAmount = (billingAmountParam != null) ? billingAmountParam : projectAmount;
+        const seedName   = stage ? `出来高 ${stage}` : guess;
+        setItems([{ no: 1, name: seedName, qty: '1', unit: '式', unitPrice: String(seedAmount), amount: 0 }]);
         setClientName(p?.clientName || p?.customerName || '　御中');
       } catch (e) {
         console.log(e);
@@ -53,7 +60,7 @@ export default function InvoiceEditorScreen() {
       }
     })();
     return () => { alive = false; };
-  }, [projectId]);
+  }, [projectId, stage, billingAmountParam]);
 
   const calcItems = useMemo(() => items.map(it => {
     const qty = Number(it.qty || 0);
@@ -135,31 +142,64 @@ export default function InvoiceEditorScreen() {
         <TextInput style={tw`border rounded px-2 py-1`} value={company.bankLine} onChangeText={v=>setCompany(s=>({...s,bankLine:v}))} />
       </View>
 
+      {/* 明細テーブル（横スクロール対応） */}
       <View style={tw`mb-2`}>
         <Text style={tw`font-bold mb-1`}>明細</Text>
-        <View style={tw`flex-row bg-gray-100 p-2 rounded`}>
-          <Text style={tw`w-10`}>No</Text>
-          <Text style={tw`flex-1`}>内容</Text>
-          <Text style={tw`w-16 text-right`}>数量</Text>
-          <Text style={tw`w-12 text-center`}>単位</Text>
-          <Text style={tw`w-20 text-right`}>単価</Text>
-          <Text style={tw`w-24 text-right`}>金額</Text>
-        </View>
       </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator style={tw`-mx-4`} contentContainerStyle={tw`px-4`}>
+        <View style={{ minWidth: 760 }}>
+          {/* ヘッダ行 */}
+          <View style={tw`flex-row bg-gray-100 p-2 rounded`}>
+            <Text style={tw`w-12`}>No</Text>
+            <Text style={tw`w-80`}>内容</Text>{/* 320px 相当：長文対応 */}
+            <Text style={tw`w-20 text-right`}>数量</Text>
+            <Text style={tw`w-16 text-center`}>単位</Text>
+            <Text style={tw`w-28 text-right`}>単価</Text>
+            <Text style={tw`w-32 text-right`}>金額</Text>
+            <Text style={tw`w-16 text-center`}>操作</Text>
+          </View>
 
-      {calcItems.map(it => (
-        <View key={it.no} style={tw`flex-row items-center p-2 border-b`}>
-          <Text style={tw`w-10`}>{it.no}</Text>
-          <TextInput style={tw`flex-1 border rounded px-2 py-1 mr-2`} value={it.name} onChangeText={v=>updateItem(it.no,'name',v)} placeholder="内容" />
-          <TextInput style={tw`w-16 border rounded px-2 py-1 mr-2 text-right`} value={String(it.qty ?? '')} onChangeText={v=>updateItem(it.no,'qty',v.replace(/[^0-9.]/g,''))} keyboardType="decimal-pad" placeholder="0" />
-          <TextInput style={tw`w-12 border rounded px-2 py-1 mr-2 text-center`} value={it.unit ?? ''} onChangeText={v=>updateItem(it.no,'unit',v)} placeholder="式" />
-          <TextInput style={tw`w-20 border rounded px-2 py-1 mr-2 text-right`} value={String(it.unitPrice ?? '')} onChangeText={v=>updateItem(it.no,'unitPrice',v.replace(/[^0-9.]/g,''))} keyboardType="decimal-pad" placeholder="0" />
-          <Text style={tw`w-24 text-right`}>{fmt(it.amount)}</Text>
-          <TouchableOpacity onPress={()=>removeRow(it.no)} style={tw`ml-2 px-2 py-1 border rounded`}>
-            <Text>削除</Text>
-          </TouchableOpacity>
+          {/* データ行 */}
+          {calcItems.map(it => (
+            <View key={it.no} style={tw`flex-row items-center p-2 border-b`}>
+              <Text style={tw`w-12`}>{it.no}</Text>
+              <TextInput
+                style={[tw`w-80 border rounded px-2 py-1 mr-2`, { minHeight: 40, textAlignVertical: 'top' }]}
+                value={it.name}
+                onChangeText={v=>updateItem(it.no,'name',v)}
+                placeholder="内容"
+                multiline
+              />
+              <TextInput
+                style={tw`w-20 border rounded px-2 py-1 mr-2 text-right`}
+                value={String(it.qty ?? '')}
+                onChangeText={v=>updateItem(it.no,'qty',v.replace(/[^0-9.]/g,''))}
+                keyboardType="decimal-pad"
+                placeholder="0"
+              />
+              <TextInput
+                style={tw`w-16 border rounded px-2 py-1 mr-2 text-center`}
+                value={it.unit ?? ''}
+                onChangeText={v=>updateItem(it.no,'unit',v)}
+                placeholder="式"
+              />
+              <TextInput
+                style={tw`w-28 border rounded px-2 py-1 mr-2 text-right`}
+                value={String(it.unitPrice ?? '')}
+                onChangeText={v=>updateItem(it.no,'unitPrice',v.replace(/[^0-9.]/g,''))}
+                keyboardType="decimal-pad"
+                placeholder="0"
+              />
+              <Text style={tw`w-32 text-right`}>{fmt(it.amount)}</Text>
+              <View style={tw`w-16 items-center`}>
+                <TouchableOpacity onPress={()=>removeRow(it.no)} style={tw`px-2 py-1 border rounded`}>
+                  <Text>削除</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
         </View>
-      ))}
+      </ScrollView>
 
       <View style={tw`mt-3`}>
         <TouchableOpacity onPress={addRow} style={tw`self-start border rounded px-3 py-2`}>

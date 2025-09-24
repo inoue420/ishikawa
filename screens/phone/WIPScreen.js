@@ -31,8 +31,12 @@ export default function WIPScreen() {
       setLoading(true);
       const all = await fetchProjects();
       const wip = [];
+      const initialInputs = {};
       for (const p of all) {
         wip.push(p);
+        // デフォルト請求金額（projectsコレクション内の値）を初期入力へ
+        const defAmt = p?.invoiceAmount ?? p?.amount ?? p?.budget ?? '';
+        if (defAmt !== '') initialInputs[p.id] = String(defAmt);  
         if (p.isMilestoneBilling) {
           const bs = await fetchBillings(p.id);
           // マイルストーン請求のデータを初期化
@@ -48,6 +52,7 @@ export default function WIPScreen() {
       }
       wip.sort((a, b) => a.endDate.toDate() - b.endDate.toDate());
       setProjects(wip);
+      setInputs(initialInputs);
       setLoading(false);
     })();
   }, []);
@@ -241,8 +246,12 @@ export default function WIPScreen() {
               {/* 新規：エディタへ遷移して編集／CSV等へ */}
               <TouchableOpacity
                 style={tw`mt-2 px-4 py-2 bg-emerald-200 rounded self-start`}
-                onPress={() => navigation.navigate('InvoiceEditor', { projectId: p.id })}
-              >
+                onPress={() => navigation.navigate('InvoiceEditor', { 
+                  projectId: p.id,
+                  amount: Number(p.orderAmount ?? 0),
+                   itemName: (p.title || p.name || p.projectName || '工事費 一式')
+                 })}
+               >
                 <Text>請求書編集へ</Text>
               </TouchableOpacity>
               {p.invoiceStatus === 'issued' && (
@@ -285,6 +294,19 @@ export default function WIPScreen() {
                       <Text>{b.status === 'pending' ? '請求書発行' : '入金確認'}</Text>
                     </TouchableOpacity>
                   )}
+                  {/* 出来高ごとに請求書エディタへ */}
+                  <TouchableOpacity
+                    onPress={() =>
+                      navigation.navigate('InvoiceEditor', {
+                        projectId: p.id,
+                        billingId: b.id,
+                        amount: Number(b.amount ?? p.orderAmount ?? 0), // 出来高金額がなければ受注金額
+                        itemName: `${p.title || p.name || '工事'}／出来高 ${b.stage}`
+                       })}
+                    style={tw`mt-2 px-3 py-2 bg-emerald-200 rounded self-start`}
+                  >
+                    <Text>請求書編集へ</Text>
+                  </TouchableOpacity> 
                   {/* ── 追加：請求エントリ削除ボタン */}
                   <View style={tw`mt-2`}>
                     <TouchableOpacity
