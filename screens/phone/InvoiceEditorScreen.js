@@ -6,6 +6,7 @@ import tw from 'twrnc';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { fetchProjectById } from '../../firestoreService';
+import { printToFileAsync } from 'expo-print';
 
 const DEFAULT_COMPANY = {
   issuerName: '株式会社石川組',
@@ -17,7 +18,13 @@ const DEFAULT_COMPANY = {
   bankLine: 'お振込先：北國銀行　砺波支店　普通　20675　株式会社石川組',
 };
 const fmt = (n) => (n === '' || n == null || isNaN(Number(n)) ? '' : Number(n).toLocaleString('ja-JP'));
-
+const esc = (s='') => String(s)
+  .replace(/&/g,'&amp;')
+  .replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;')
+  .replace(/"/g,'&quot;')
+  .replace(/'/g,'&#39;');
+  
 export default function InvoiceEditorScreen() {
   const route = useRoute();
   const navigation = useNavigation();
@@ -112,6 +119,77 @@ export default function InvoiceEditorScreen() {
     }
   }, [calcItems, subtotal, tax, total, taxRate, invoiceNo]);
 
+  const exportPDF = useCallback(async () => {
+    try {
+      // 超簡易テンプレ（後で請求書テンプレに差し替え）
+      const rows = calcItems.map(it => {
+        const qty = it.qty || '';
+        const unit = it.unit || '';
+        const unitPrice = fmt(it.unitPrice || 0);
+        const amount = fmt(it.amount || 0);
+        return `
+        <tr>
+          <td style="text-align:center">${it.no}</td>
+          <td>${esc(it.name||'')}</td>
+          <td style="text-align:right">${qty}</td>
+          <td style="text-align:center">${esc(unit)}</td>
+          <td style="text-align:right">${unitPrice}</td>
+          <td style="text-align:right">${amount}</td>
+        </tr>`;
+      }).join('');
+      const subtotalStr = fmt(subtotal);
+      const taxStr = fmt(tax);
+      const totalStr = fmt(total)
+      const html = `
+      <html><head>
+        <meta charset="utf-8" />
+        <style>
+          @page { size: A4; margin: 16mm; }
+          body { font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", sans-serif; font-size:12px; }
+          h1 { font-size:20px; text-align:center; margin: 0 0 12px; }
+          table { width:100%; border-collapse: collapse; }
+          th, td { border:1px solid #999; padding:6px; }
+          th { background:#f2f2f2; }
+          .right { text-align:right; }
+        </style>
+      </head><body>
+        <h1>請　求　書</h1>
+        <div>宛先：${esc(clientName)}</div>
+        <div>発行日：${issueDate}　請求書番号：${esc(invoiceNo)}</div>
+        <hr/>
+        <table>
+          <thead>
+            <tr><th>No</th><th>内容</th><th>数量</th><th>単位</th><th>単価</th><th>金額</th></tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="right" style="margin-top:12px">
+          小計：${subtotalStr}　消費税：${taxStr}　
+          <strong>合計：${totalStr}</strong>
+        </div>
+        <div style="margin-top:16px">
+          <div>${esc(company.issuerName)}</div>
+          <div>${esc(company.issuerPostal)}　${esc(company.issuerAddress)}</div>
+          <div>${esc(company.issuerTel)}　${esc(company.issuerFax)}</div>
+          <div>${esc(company.issuerReg)}</div>
+          <div>${esc(company.bankLine)}</div>
+        </div>
+      </body></html>`;
+      const file = await printToFileAsync({ html });
+      // ファイル名を請求書番号に
+      const pdfName = `${(invoiceNo || 'invoice')}.pdf`;
+      const targetUri = FileSystem.documentDirectory + pdfName;
+      try {
+        await FileSystem.moveAsync({ from: file.uri, to: targetUri });
+        await Sharing.shareAsync(targetUri);
+      } catch {
+        // 失敗時は元のURIで共有
+        await Sharing.shareAsync(file.uri);
+      }
+    } catch (e) {
+      Alert.alert('PDF出力失敗', 'PDFの作成に失敗しました。');
+    }
+  }, [calcItems, clientName, issueDate, invoiceNo, subtotal, tax, total, company]);
   return (
     <ScrollView style={tw`flex-1 bg-white`} contentContainerStyle={tw`p-4`}>
       <View style={tw`mb-4`}>
@@ -220,6 +298,9 @@ export default function InvoiceEditorScreen() {
       <View style={tw`mt-6 flex-row gap-3`}>
         <TouchableOpacity onPress={exportCSV} style={tw`border rounded px-4 py-3`}>
           <Text>CSVエクスポート</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={exportPDF} style={tw`border rounded px-4 py-3`}>
+          <Text>PDFエクスポート</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={()=>navigation.goBack()} style={tw`border rounded px-4 py-3`}>
           <Text>戻る</Text>
