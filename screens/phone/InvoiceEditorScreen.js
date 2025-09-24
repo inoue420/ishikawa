@@ -9,6 +9,11 @@ import { fetchProjectById } from '../../firestoreService';
 import { printToFileAsync } from 'expo-print';
 import { Asset } from 'expo-asset';
 
+// ✅ assets はプロジェクト直下。screens/phone からは ../../
+const TEAM_LOGO_MOD   = require('../../assets/ikg-team.png');
+const SYMBOL_LOGO_MOD = require('../../assets/ishikawa-symbol.png');
+
+
 const DEFAULT_COMPANY = {
   issuerName: '株式会社石川組',
   issuerPostal: '〒939-1363',
@@ -31,7 +36,11 @@ const toJpDate = (s='') => {
   if (m) return `${m[1]}年${Number(m[2])}月${Number(m[3])}日`;
   const d = new Date(s || Date.now());
   return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;
-};  
+};
+
+// 宛先末尾の「御中/様/殿」を削除して表示用に整形
+const normalizeRecipient = (s='') =>
+  String(s).replace(/\s*(御中|様|殿)\s*$/,'').trim();
   
 export default function InvoiceEditorScreen() {
   const route = useRoute();
@@ -62,13 +71,19 @@ export default function InvoiceEditorScreen() {
     // 画像アセットをBase64にして埋め込み
     (async () => {
       try {
-        const teamAsset   = Asset.fromModule(require('../../../assets/branding/ikg-team.png'));
-        const symbolAsset = Asset.fromModule(require('../../../assets/branding/ishikawa-symbol.png'));
+        const teamAsset   = Asset.fromModule(TEAM_LOGO_MOD);
+        const symbolAsset = Asset.fromModule(SYMBOL_LOGO_MOD);
         await Promise.all([teamAsset.downloadAsync(), symbolAsset.downloadAsync()]);
-        const teamB64   = await FileSystem.readAsStringAsync(teamAsset.localUri ?? teamAsset.uri,   { encoding: FileSystem.EncodingType.Base64 });
-        const symbolB64 = await FileSystem.readAsStringAsync(symbolAsset.localUri ?? symbolAsset.uri,{ encoding: FileSystem.EncodingType.Base64 });
-        setLogoTeam(`data:image/png;base64,${teamB64}`);
-        setLogoSymbol(`data:image/png;base64,${symbolB64}`);
+        const teamSrc   = teamAsset.localUri   || teamAsset.uri;
+        const symbolSrc = symbolAsset.localUri || symbolAsset.uri;
+        if (teamSrc) {
+          const teamB64 = await FileSystem.readAsStringAsync(teamSrc, { encoding: FileSystem.EncodingType.Base64 });
+          setLogoTeam(`data:image/png;base64,${teamB64}`);
+        }
+        if (symbolSrc) {
+          const symbolB64 = await FileSystem.readAsStringAsync(symbolSrc, { encoding: FileSystem.EncodingType.Base64 });
+          setLogoSymbol(`data:image/png;base64,${symbolB64}`);
+        }
       } catch (_) {
         // ロゴ未設定でもPDF生成は継続
       }
@@ -179,13 +194,29 @@ export default function InvoiceEditorScreen() {
           .horizontal-line { width:100%; border-top:1px solid #8e8e8e; margin-bottom:15px; }
           .header-row { display:flex; justify-content:space-between; margin-bottom:15px; }
           .header-left { width:50%; }
-          .recipient { font-size:28px; font-weight:bold; margin-bottom:5px; }
+          /* 宛先：企業名の右に「御中」。社名～御中の間に下線を引く */
+          .recipient-row{
+            display:flex; align-items:flex-end; gap:8px; margin-bottom:6px;
+          }
+          .recipient-name{
+            font-size:28px; font-weight:bold; line-height:1.2; min-width:0;
+          }
+          /* 社名と「御中」の間の空白部分のみ下線を引く */
+          .recipient-underline{
+            flex:1; border-bottom:1px solid #000; margin:0 4px 3px 4px;
+          }
+          .recipient-suffix{
+            font-size:20px; font-weight:bold;
+          }
           .message { font-size:12px; }
           .header-right { width:50%; text-align:right; }
           .date { font-size:12px; margin-bottom:8px; }
           .logo-container { display:flex; justify-content:flex-end; align-items:flex-start; gap:8px; margin-bottom:5px; }
-          .company-info { font-size:12px; line-height:1.4; }
-          .amount-section { border:1px solid #000; padding:6px 10px; margin:6px 0 3px; display:flex; justify-content:space-between; align-items:center; }
+          /* シンボル＋社名（社名1.5倍＝18px）を同一行に */
+          .issuer-row{ display:flex; justify-content:flex-end; align-items:center; gap:8px; margin:4px 0; }
+          .issuer-symbol{ height:22px; }
+          .issuer-name{ font-size:18px; font-weight:bold; }
+          .company-info { font-size:12px; line-height:1.4; text-align:right; }          .amount-section { border:1px solid #000; padding:6px 10px; margin:6px 0 3px; display:flex; justify-content:space-between; align-items:center; }
           .amount-label { font-size:18px; font-weight:bold; letter-spacing:.4em; }
           .amount-value { font-size:20px; font-weight:bold; }
           .bank-info { font-size:12px; margin-bottom:15px; }
@@ -213,19 +244,22 @@ export default function InvoiceEditorScreen() {
         <div class="horizontal-line"></div>
         <div class="header-row">
           <div class="header-left">
-            <div class="recipient">${esc(clientName)}</div>
+            <div class="recipient-row">
+              <div class="recipient-name">${esc(normalizeRecipient(clientName))}</div>
+              <div class="recipient-suffix">御中</div>
+            </div>
             <div class="message">下記の通り、御請求申し上げます。</div>
           </div>
           <div class="header-right">
             <div class="date">発行日：${esc(toJpDate(issueDate))}　請求書番号：${esc(invoiceNo)}</div>
             <div class="logo-container">
-              ${logoTeam   ? `<img src="${logoTeam}"   alt="TEAM ISHIKAWA" style="height:55px" />` : ''}
+              ${logoTeam ? `<img src="${logoTeam}" alt="TEAM ISHIKAWA" style="height:55px" />` : ''}
             </div>
-            <div class="logo-container">
-              ${logoSymbol ? `<img src="${logoSymbol}" alt="Ishikawa Symbol" style="height:22px" />` : ''}
+            <div class="issuer-row">
+              ${logoSymbol ? `<img src="${logoSymbol}" class="issuer-symbol" alt="Ishikawa Symbol" />` : ''}
+              <div class="issuer-name">${esc(company.issuerName)}</div>
             </div>
             <div class="company-info">
-              ${esc(company.issuerName)}<br/>
               ${esc(company.issuerPostal)} ${esc(company.issuerAddress)}<br/>
               ${esc(company.issuerTel)}　${esc(company.issuerFax)}<br/>
               ${esc(company.issuerReg)}
@@ -263,7 +297,7 @@ export default function InvoiceEditorScreen() {
           </tfoot>
         </table>
       </body></html>`;
-  }, [calcItems, clientName, issueDate, invoiceNo, subtotal, tax, total, company, taxRate, logoTeam, logoSymbol]);
+}, [calcItems, clientName, issueDate, invoiceNo, subtotal, tax, total, company, taxRate, logoTeam, logoSymbol]);
 
   // ---- PDF生成（URIを返す）----
   const generatePDF = useCallback(async () => {
