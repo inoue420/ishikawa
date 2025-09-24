@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   View, Text, TextInput, Button,
@@ -22,6 +23,7 @@ export default function WIPScreen() {
   const [billingsMap, setBillingsMap] = useState({});
   const [inputs, setInputs]     = useState({});
   const [billingInputsMap, setBillingInputsMap] = useState({});
+  const navigation = useNavigation();
 
   // ── ① 画面立ち上げ時に WIP 一覧を取得
   useEffect(() => {
@@ -123,30 +125,25 @@ export default function WIPScreen() {
   // ── ⑤ マイル請求：請求／入金
   const onBillingAction = async (projId, bill) => {
     try {
-     if (bill.status === 'pending') {
-       // 入力中の金額を取得
-       const amt = Number(billingInputsMap[projId]?.[bill.id] || 0);
-       // 金額保存
-       await updateBillingAmount(projId, bill.id, amt);
-       // ステータスを発行へ
-       await updateBillingStatus(projId, bill.id, 'issued');
-     } else {
-       // 入金へ
-       await updateBillingStatus(projId, bill.id, 'paid');
-     }
-      const next = bill.status === 'pending' ? 'issued' : 'paid';
+      let next = 'paid';
+      let newAmount = null;
+      if (bill.status === 'pending') {
+        // 入力中の金額を保存して 'issued' へ
+        newAmount = Number(billingInputsMap[projId]?.[bill.id] || 0);
+        await updateBillingAmount(projId, bill.id, newAmount);
+        next = 'issued';
+      }
       await updateBillingStatus(projId, bill.id, next);
-      setBillingsMap(m => {
-        const updated = m[projId].map(b =>
-          b.id === bill.id ? { ...b, status: next } : b
+      setBillingsMap((m) => {
+        const list = m[projId] || [];
+        const updated = list.map((b) =>
+          b.id === bill.id ? { ...b, status: next, ...(newAmount!=null ? { amount: newAmount } : {}) } : b
         );
+        // 全て paid なら WIP から除外
+        const allPaid = updated.every((b) => b.status === 'paid');
+        if (allPaid) setProjects((ps) => ps.filter((p) => p.id !== projId));
         return { ...m, [projId]: updated };
       });
-      // 全て paid なら一覧から除外
-      const remaining = billingsMap[projId].filter(b => b.status !== 'paid' && b.id!==bill.id);
-      if (remaining.length === 0) {
-        setProjects(ps => ps.filter(p => p.id !== projId));
-      }
     } catch (e) {
       console.error(e);
       alert('マイルストーン処理に失敗しました');
@@ -217,10 +214,12 @@ export default function WIPScreen() {
 
           {/* ← 請求方式切替ボタン */}
           <View style={tw`mt-2 mb-4`}>
-            <Button
-              title={p.isMilestoneBilling ? '通常請求に切替' : '出来高請求に切替'}
+            <TouchableOpacity
               onPress={() => onToggleBilling(p.id, p.isMilestoneBilling)}
-            />
+              style={tw`px-4 py-2 bg-gray-200 rounded self-start`}
+            >
+              <Text>{p.isMilestoneBilling ? '通常請求に切替' : '出来高請求に切替'}</Text>
+            </TouchableOpacity>
           </View>
 
           {!p.isMilestoneBilling ? (
@@ -232,10 +231,28 @@ export default function WIPScreen() {
                 value={inputs[p.id]?.toString() || ''}
                 onChangeText={v => setInputs(i => ({ ...i, [p.id]: v }))}
               />
-              <Button title="請求書発行" onPress={() => onInvoice(p.id)} />
+              {/* 即時発行（従来動作を維持） */}
+              <TouchableOpacity
+                onPress={() => onInvoice(p.id)}
+                style={tw`mt-1 px-4 py-2 bg-indigo-200 rounded self-start`}
+              >
+                <Text>請求書発行（即時）</Text>
+              </TouchableOpacity>
+              {/* 新規：エディタへ遷移して編集／CSV等へ */}
+              <TouchableOpacity
+                style={tw`mt-2 px-4 py-2 bg-emerald-200 rounded self-start`}
+                onPress={() => navigation.navigate('InvoiceEditor', { projectId: p.id })}
+              >
+                <Text>請求書編集へ</Text>
+              </TouchableOpacity>
               {p.invoiceStatus === 'issued' && (
                 <View style={tw`mt-2`}>
-                  <Button title="入金確認" onPress={() => onPaid(p.id)} />
+                  <TouchableOpacity
+                    onPress={() => onPaid(p.id)}
+                    style={tw`px-4 py-2 bg-green-200 rounded self-start`}
+                  >
+                    <Text>入金確認</Text>
+                  </TouchableOpacity>
                 </View>
               )}
             </>
@@ -261,18 +278,21 @@ export default function WIPScreen() {
                   <Text>金額: {b.amount}</Text>
                   <Text>状態: {b.status}</Text>
                   {b.status !== 'paid' && (
-                    <Button
-                      title={b.status === 'pending' ? '請求書発行' : '入金確認'}
+                    <TouchableOpacity
                       onPress={() => onBillingAction(p.id, b)}
-                    />
+                      style={tw`mt-1 px-3 py-2 bg-indigo-200 rounded self-start`}
+                    >
+                      <Text>{b.status === 'pending' ? '請求書発行' : '入金確認'}</Text>
+                    </TouchableOpacity>
                   )}
                   {/* ── 追加：請求エントリ削除ボタン */}
                   <View style={tw`mt-2`}>
-                    <Button
-                      title="削除"
-                      color="#f00"
+                    <TouchableOpacity
                       onPress={() => onDeleteBilling(p.id, b.id)}
-                    />
+                      style={tw`px-3 py-2 bg-red-200 rounded self-start`}
+                    >
+                      <Text>削除</Text>
+                    </TouchableOpacity>
                   </View>                  
                 </View>
               ))}

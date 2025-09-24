@@ -7,7 +7,7 @@ import HomeStackNavigator from '../screens/phone/HomeStackNavigator';
 import ScheduleScreen      from '../screens/phone/ScheduleScreen';
 import AttendanceScreen from '../screens/phone/AttendanceScreen';
 import MaterialsScreen from '../screens/phone/MaterialsScreen';
-import WIPScreen from '../screens/phone/WIPScreen';
+import WIPStackNavigator from '../screens/phone/WIPStackNavigator';
 // BillingScreen は参照用として残すが、タブには登録しない
 // import BillingScreen from '../screens/phone/BillingScreen';
 import ProfileStackScreen from '../screens/phone/ProfileStackScreen';
@@ -93,8 +93,8 @@ export default function PhoneNavigator({ userEmail }) {
       />
       <Tab.Screen
         name="WIP"
-        component={WIPScreen}
-        options={{ title: 'WIP' }}
+        component={WIPStackNavigator}
+        options={{ title: '請求管理' }}
         initialParams={{ userEmail }} // ★ 追加
       />
       {isPrivUser(me) && (
