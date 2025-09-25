@@ -1,15 +1,13 @@
 // screens/phone/ManagerApprovalScreen.js
-import React, { useEffect, useState, useContext } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, Button, FlatList, TouchableOpacity, Alert } from 'react-native';
 import tw from 'twrnc';
-import { DateContext } from '../../DateContext';
 import { fetchAllUsers, fetchPendingForManager, fetchPendingForManagers, approvePunch, rejectPunch } from '../../firestoreService';
 
 
 
 export default function ManagerApprovalScreen({ route }) {
   const managerLoginId = route.params?.managerLoginId ?? '';
-  const { date: selectedDate } = useContext(DateContext);
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -17,7 +15,16 @@ export default function ManagerApprovalScreen({ route }) {
   const [me, setMe] = useState(null);
   const [byLoginId, setByLoginId] = useState(null);
 
-  const dateKey = d => d.toISOString().slice(0, 10);
+  // ▼ JST（端末ローカル）で日付キー生成（AttendanceScreen と同一仕様）
+  const dateKey = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  // ▼ この画面は常に「本日」を対象にする
+  const [currentDate] = useState(() => new Date());
 
   const load = async () => {
     setLoading(true);
@@ -26,7 +33,7 @@ export default function ManagerApprovalScreen({ route }) {
       const self = me ?? byLoginId.get((managerLoginId || '').toLowerCase()) ?? null;
       if (!self?.loginId) throw new Error('approver not resolved');
 
-      const targetDate = dateKey(selectedDate);
+      const targetDate = dateKey(currentDate);
       let list = [];
       if (self.role === 'executive') {
         // 役員宛（managerLoginId === self.loginId）の全件を取得
@@ -88,7 +95,7 @@ export default function ManagerApprovalScreen({ route }) {
     })();
   }, [managerLoginId]);
 
-  useEffect(() => { if (byLoginId) load(); }, [selectedDate, managerLoginId, byLoginId, me]);
+  useEffect(() => { if (byLoginId) load(); }, [currentDate, managerLoginId, byLoginId, me]);
 
   const onApprove = async (id) => {
     try {
@@ -137,7 +144,7 @@ export default function ManagerApprovalScreen({ route }) {
     return (
       <View style={tw`mb-3 p-3 bg-white rounded-lg shadow`}>
         <Text style={tw`font-bold`}>
-          {item.date ?? dateKey(selectedDate)} / {item.type === 'in' ? '出勤' : '退勤'} / {timeStr} {approvedInfo}
+          {item.date ?? dateKey(currentDate)} / {item.type === 'in' ? '出勤' : '退勤'} / {timeStr} {approvedInfo}
         </Text>
         <Text style={tw`mt-1`}>
           {item.employeeName ?? item.employeeId ?? item.employeeEmail ?? '-'}（{item.affiliation ?? '-'}）
@@ -182,7 +189,7 @@ export default function ManagerApprovalScreen({ route }) {
   return (
     <View style={tw`flex-1 bg-gray-50`}>
       <View style={tw`p-4 border-b border-gray-200 bg-white`}>
-        <Text style={tw`text-lg font-semibold`}>出勤認証（{dateKey(selectedDate)}）</Text>
+        <Text style={tw`text-lg font-semibold`}><Text>出勤認証（{dateKey(currentDate)}）</Text></Text>
         {!!managerLoginId && (
           <Text style={tw`text-xs text-gray-600`}>承認者: {managerLoginId}{me?.role ? `（${me.role === 'executive' ? '役員' : me.role === 'manager' ? '部長' : me.role}）` : ''}</Text>
         )}
