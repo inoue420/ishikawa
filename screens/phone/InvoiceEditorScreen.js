@@ -216,9 +216,25 @@ export default function InvoiceEditorScreen() {
           .issuer-row{ display:flex; justify-content:flex-end; align-items:center; gap:8px; margin:4px 0; }
           .issuer-symbol{ height:22px; }
           .issuer-name{ font-size:18px; font-weight:bold; }
-          .company-info { font-size:12px; line-height:1.4; text-align:right; }          .amount-section { border:1px solid #000; padding:6px 10px; margin:6px 0 3px; display:flex; justify-content:space-between; align-items:center; }
+          .company-info { font-size:12px; line-height:1.4; text-align:right; }          
+          /* 金額ラベルの右に仕切り線 → その直右に金額を配置 */
+          .amount-section {
+            border:1px solid #000;
+            padding:6px 10px;
+            margin:6px 0 3px;
+            display:flex;
+            align-items:center;
+            justify-content:flex-start; /* ← 左寄せにして詰める */
+            gap:0;                      /* 余白は金額側のpaddingで調整 */
+          }
           .amount-label { font-size:18px; font-weight:bold; letter-spacing:.4em; }
-          .amount-value { font-size:20px; font-weight:bold; }
+          .amount-value {
+            font-size:20px;
+            font-weight:bold;
+            border-left:1px solid #000; /* ← ラベル右の仕切り線 */
+            margin-left:8px;            /* 線と金額の最小マージン */
+            padding-left:8px;           /* 金額の内側余白 */
+          }
           .bank-info { font-size:12px; margin-bottom:15px; }
           table { width:100%; border-collapse:collapse; }
           th, td { border:1px solid #000; padding:4px; font-size:12px; vertical-align:middle; }
