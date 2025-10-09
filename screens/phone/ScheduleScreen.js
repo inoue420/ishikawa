@@ -58,6 +58,16 @@ function buildEmployeeIndex(list = []) {
   return out;
 }
 
+// 各所で形が揃っていないプロジェクトIDを堅牢に解決
+function getProjectId(p) {
+  const cands = [p?.id, p?.projectId, p?.project?.id, p?.docId, p?._id, p?.key];
+  for (const v of cands) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+  }
+  return null;
+}
+
 // 参加者の値（文字列/オブジェクト/id/email 等）を name に解決
 function resolveToNameAny(v, empIdx) {
   if (!v) return '';
@@ -114,6 +124,14 @@ const parseNameForLocation = (fullName) => {
  const DAY_MS = 24 * 60 * 60 * 1000;
 // フォーカス時のTTL：前回取得から60秒超えていたら当月を更新
  const REFRESH_TTL_MS = 60 * 1000; 
+
+// 便利: Date -> 'YYYY-MM-DD'
+const dateKey = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}; 
 
 export default function ScheduleScreen({ navigation, route }) {
   // 可能な限り上位のナビゲータから userEmail を拾う
@@ -313,7 +331,7 @@ export default function ScheduleScreen({ navigation, route }) {
         p?.customerName || p?.clientName || p?.customer || p?.client || p?.customer_name || '';
       const getParticipants = (p) => {
         // 1) 当月アサインが取れていればそれを使用
-        const pid = String(p?.id ?? '');
+        const pid = getProjectId(p) || '';
         const set1 = (aMap && aMap[pid]) ? Array.from(aMap[pid]) : [];
         // 2) プロジェクト側に候補があれば補完
         //    代表的なキー名の総当たり（ID/オブジェクト/文字列に対応）
@@ -390,7 +408,7 @@ export default function ScheduleScreen({ navigation, route }) {
 
       const isMulti = (e - s) >= DAY_MS;              // 複数日判定
       const startMs = s0.getTime();                   // 並べ替えキー（開始日時）
-      const projectKey = String(p.id ?? p.title ?? '');
+      const projectKey = String(getProjectId(p) ?? p.title ?? '');
       const rawTitle = String(p.title ?? p.name ?? p.id ?? '（無題）');
       const { loc, plain } = parseNameForLocation(rawTitle);
       const locFinal = p.location || loc || '';
@@ -454,6 +472,19 @@ export default function ScheduleScreen({ navigation, route }) {
 
     return layout;
   }, [projects]);
+  // プロジェクトの表示日に使う日付を決める：
+  // Contextの date がその案件期間内ならそれ、外れていれば startDate を使う
+  const chooseDateForProject = useCallback((p, ctxDate) => {
+    const s0 = fromTimestampOrString(p.startDate);
+    const e0 = fromTimestampOrString(p.endDate || p.startDate);
+    const start = new Date(s0.getFullYear(), s0.getMonth(), s0.getDate());
+    const end   = new Date(e0.getFullYear(), e0.getMonth(), e0.getDate());
+    const base  = ctxDate instanceof Date ? new Date(ctxDate) : new Date();
+    const d     = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+    if (d < start || d > end) return start;
+    return d;
+  }, []);
+  
 
   const handleSelectDate = useCallback((dateString) => {
     const [y, m, d] = dateString.split('-').map(Number);
@@ -628,14 +659,14 @@ export default function ScheduleScreen({ navigation, route }) {
                 <Text style={tw`text-xs text-gray-500 px-2 py-1`}>一致なし</Text>
               ) : results.map((p) => {
                   const title = String(p?.title || p?.name || '（無題）');
+                  const pid = getProjectId(p) || '';
                   const s0 = fromTimestampOrString(p.startDate);
                   const e0 = fromTimestampOrString(p.endDate || p.startDate);
                   const range = `${toDateString(s0)} 〜 ${toDateString(e0)}`;
                   const customer =
                     p?.customerName || p?.clientName || p?.customer || p?.client || '';
                   const parts = (() => {
-                    const pid = String(p?.id ?? '');
-                    const aNames = (assignMap && assignMap[pid]) ? Array.from(assignMap[pid]) : [];
+                    const aNames = pid && assignMap && assignMap[pid] ? Array.from(assignMap[pid]) : [];
                     const pRaw =
                       p?.participantNames ??
                       p?.participants ??
@@ -649,7 +680,7 @@ export default function ScheduleScreen({ navigation, route }) {
                     return all.join(' / ');
                   })();
                   return (
-                    <View key={String(p.id || title)} style={tw`mb-2 p-3 rounded-xl bg-white border border-gray-200`}>
+                    <View key={pid || title} style={tw`mb-2 p-3 rounded-xl bg-white border border-gray-200`}>
                       <Text style={tw`text-sm font-bold text-gray-900`} numberOfLines={2}>{title}</Text>
                       <Text style={tw`text-[11px] text-gray-600 mt-1`}>{range}</Text>
                       {!!customer && (
@@ -660,14 +691,28 @@ export default function ScheduleScreen({ navigation, route }) {
                       )}
                       <View style={tw`mt-2 flex-row`}>
                         <TouchableOpacity
-                          onPress={() => navigation.navigate('HomeStack', {
-                            screen: 'ProjectDetail',
-                            params: { projectId: p.id, userEmail },
-                          })}
-                          style={tw`px-3 py-2 rounded-xl bg-blue-600`}
+                          disabled={!pid}
+                          onPress={() => {
+                            if (!pid) return;
+                            // 表示日を決定し、Contextにも反映
+                            const d = chooseDateForProject(p, date);
+                            setDate(d);
+                            // ProjectDetail が where で使う 'date' を必ず渡す
+                            navigation.navigate('HomeStack', {
+                              screen: 'ProjectDetail',
+                              params: {
+                                projectId: pid,
+                                userEmail,
+                                date: dateKey(d),
+                              },
+                            });
+                          }}
+                          style={tw`${pid ? 'bg-blue-600' : 'bg-gray-300'} px-3 py-2 rounded-xl`}
                           activeOpacity={0.8}
                         >
-                          <Text style={tw`text-white text-xs font-semibold`}>詳細を開く</Text>
+                          <Text style={tw`text-white text-xs font-semibold`}>
+                            {pid ? '詳細を開く' : 'IDが無く開けません'}
+                          </Text>
                         </TouchableOpacity>
                       </View>
                     </View>
