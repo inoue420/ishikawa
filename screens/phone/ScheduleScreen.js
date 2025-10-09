@@ -1,11 +1,18 @@
 // screens/phone/ScheduleScreen.js
 import React, { useEffect, useMemo, useState, useContext, useCallback, useRef } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, Dimensions } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { View, Text, TouchableOpacity, ActivityIndicator, Dimensions, TextInput, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import tw from 'twrnc';
 import { CalendarList, LocaleConfig } from 'react-native-calendars';
 import { DateContext } from '../../DateContext';
-import { fetchProjectsOverlappingRangeVisible, findEmployeeByIdOrEmail } from '../../firestoreService';
+import {
+  fetchProjectsOverlappingRangeVisible,
+  findEmployeeByIdOrEmail,
+  // 可能なら当月アサインをまとめて取得して参加者名に反映
+  fetchAssignmentsByYmdRange,
+  fetchAllUsers,
+} from '../../firestoreService';
 
 // ---------- 日本語ローカライズ ----------
 LocaleConfig.locales['ja'] = {
@@ -25,7 +32,55 @@ const toDateString = (d) => {
   return `${y}-${m}-${day}`;
 };
 const fromTimestampOrString = (v) => (v?.toDate ? v.toDate() : new Date(v));
+// 検索用に正規化（大小無視・空白/全角空白を除去）
+const normalizeForSearch = (s) =>
+  String(s ?? '')
+    .toLowerCase()
+    .replace(/\u3000/g, '')   // 全角スペース除去
+    .replace(/\s+/g, '');     // 半角スペース除去
+// ざっくりメール判定（文字列参加者の混入を弾くのに使用）
+const isProbablyEmail = (s) => /@/.test(String(s || ''))    
 
+// ===== 従業員インデックス（employeesコレクションを想定）=====
+//  byId: { id -> name }, byEmail: { emailLower -> name }, byLoginId: { loginIdLower -> name }
+function buildEmployeeIndex(list = []) {
+  const out = { byId: {}, byEmail: {}, byLoginId: {} };
+  list.forEach(u => {
+    if (!u) return;
+    const id = u.id || u.employeeId || u.uid;
+    const name = (u.name || u.displayName || u.fullName || '').trim();
+    const email = (u.email || u.mail || '').trim().toLowerCase();
+    const loginId = (u.loginId || u.login_id || '').trim().toLowerCase();
+    if (id && name) out.byId[id] = name;
+    if (email && name) out.byEmail[email] = name;
+    if (loginId && name) out.byLoginId[loginId] = name;
+  });
+  return out;
+}
+
+// 参加者の値（文字列/オブジェクト/id/email 等）を name に解決
+function resolveToNameAny(v, empIdx) {
+  if (!v) return '';
+  if (typeof v === 'object') {
+    const n = (v.name || v.displayName || v.fullName || '').trim();
+    if (n) return n;
+    const id = v.id || v.employeeId;
+    if (id && empIdx?.byId?.[id]) return empIdx.byId[id];
+    const email = (v.email || '').toLowerCase();
+    if (email && empIdx?.byEmail?.[email]) return empIdx.byEmail[email];
+    const loginId = (v.loginId || '').toLowerCase();
+    if (loginId && empIdx?.byLoginId?.[loginId]) return empIdx.byLoginId[loginId];
+    return '';
+  }
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (!s) return '';
+    if (isProbablyEmail(s)) return empIdx?.byEmail?.[s.toLowerCase()] || '';
+    // 純粋な人名文字列として採用
+    return s;
+  }
+  return '';
+}
 const hslToHex = (h, s, l) => {
   s/=100; l/=100;
   const c=(1-Math.abs(2*l-1))*s, x=c*(1-Math.abs((h/60)%2-1)), m=l-c/2;
@@ -57,6 +112,8 @@ const parseNameForLocation = (fullName) => {
  const HEADER_SPACE = 72;  // 見出し(曜日名＋月名)ぶんの概算高さ
  const CAL_HEIGHT   = HEADER_SPACE + CELL_HEIGHT * 6 + 4; // 6週ぶんを確保
  const DAY_MS = 24 * 60 * 60 * 1000;
+// フォーカス時のTTL：前回取得から60秒超えていたら当月を更新
+ const REFRESH_TTL_MS = 60 * 1000; 
 
 export default function ScheduleScreen({ navigation, route }) {
   // 可能な限り上位のナビゲータから userEmail を拾う
@@ -81,7 +138,16 @@ export default function ScheduleScreen({ navigation, route }) {
   const { date, setDate } = useContext(DateContext);
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState([]);
+  // ▼ 検索用ステート
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [assignMap, setAssignMap] = useState(null); // { [projectId]: Set<employeeName> }
+  const [employeeIndex, setEmployeeIndex] = useState(null); // { byId, byEmail, byLoginId }
+  const [refreshKey, setRefreshKey] = useState(0); // フォーカス時の再フェッチ用トリガ
+
   const cacheRef = useRef(new Map());
+  const lastFetchAtRef = useRef(new Map());   // ym -> 最終取得時刻(ms)
+  const prevVisibleMonthRef = useRef(null);   // 直前の表示月
   const screenWidth = Dimensions.get('window').width;
   const dayWidth = useMemo(() => screenWidth / 7, [screenWidth]);
   const userEmail = route?.params?.userEmail ?? findUserEmailFromNav();
@@ -96,6 +162,9 @@ export default function ScheduleScreen({ navigation, route }) {
     const d = new Date(date);
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
+  // 当月の開始・終了（日付のみ）
+  const monthStart = useMemo(() => new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1), [visibleMonth]);
+  const monthEnd   = useMemo(() => new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 0), [visibleMonth]);
 
   const theme = useMemo(() => ({
     textMonthFontWeight: '700',
@@ -127,22 +196,155 @@ export default function ScheduleScreen({ navigation, route }) {
         const rangeEnd   = new Date(end);   rangeEnd.setDate(rangeEnd.getDate() + pad);   rangeEnd.setHours(23,59,59,999);
 
         const ym = `${visibleMonth.getFullYear()}-${String(visibleMonth.getMonth()+1).padStart(2,'0')}`;
+
+        // ★ 隣の月に移動してきたら：この月のキャッシュを破棄（再取得させる）
+        const prev = prevVisibleMonthRef.current;
+        if (prev) {
+          const diff =
+            (visibleMonth.getFullYear() - prev.getFullYear()) * 12 +
+            (visibleMonth.getMonth() - prev.getMonth());
+          if (diff !== 0) {
+            // 月が変わったら検索用の当月アサインもリセット
+            setAssignMap(null);
+         }
+          if (Math.abs(diff) === 1 && cacheRef.current.has(ym)) {
+            cacheRef.current.delete(ym);
+          }
+        }
         if (cacheRef.current.has(ym)) {
           setProjects(cacheRef.current.get(ym));
           setLoading(false);
+          // 次回比較用に現在の月を記録
+          prevVisibleMonthRef.current = visibleMonth;
           return;
         }
         const rows = await fetchProjectsOverlappingRangeVisible(rangeStart, rangeEnd, me);
         const data = rows ?? [];
         cacheRef.current.set(ym, data);
+        lastFetchAtRef.current.set(ym, Date.now()); // 取得時刻を記録（TTL判定用）
         setProjects(data);
+        // 次回比較用に現在の月を記録
+        prevVisibleMonthRef.current = visibleMonth;        
       } catch (e) {
         console.error('[Schedule] fetch error:', e);
       } finally {
         setLoading(false);
       }
     })();
-  }, [visibleMonth, me]);
+  }, [visibleMonth, me, refreshKey]);
+
+  // 画面フォーカス時に「当月のみ」キャッシュを破棄して再フェッチ
+  useFocusEffect(
+    useCallback(() => {
+      const ym = `${visibleMonth.getFullYear()}-${String(visibleMonth.getMonth()+1).padStart(2,'0')}`;
+      const last = lastFetchAtRef.current.get(ym) || 0;
+      if (cacheRef.current.has(ym) && Date.now() - last > REFRESH_TTL_MS) {
+        cacheRef.current.delete(ym);
+        setAssignMap(null);          // 検索用アサインも更新させる
+        setRefreshKey(k => k + 1);   // 再取得を発火
+      }
+    }, [visibleMonth])
+  );
+
+  // employees コレクションを読み込み、インデックス化
+  const ensureEmployeeIndex = useCallback(async () => {
+    if (employeeIndex) return employeeIndex;
+    const list = await fetchAllUsers?.();
+    const idx = buildEmployeeIndex(list || []);
+    setEmployeeIndex(idx);
+    return idx;
+  }, [employeeIndex]);  
+  // 参加者名の当月分プリロード（検索初回で必要になったら取得）
+  const ensureAssignmentsForMonth = useCallback(async () => {
+    if (assignMap) return assignMap;
+    try {
+      const s = new Date(monthStart); s.setHours(0,0,0,0);
+      const e = new Date(monthEnd);   e.setHours(23,59,59,999);
+      const rows = await fetchAssignmentsByYmdRange?.(s, e);
+      if (!rows || !Array.isArray(rows)) return null;
+      // ▼ employees を読み込み、id/email/loginId → name を解決可能にする
+      const empIdx = await ensureEmployeeIndex();
+      const tmp = {};
+      rows.forEach((a) => {
+        const pid = a?.projectId || a?.project?.id;
+        if (!pid) return;
+        // 何が来ても name に解決（email / id でも OK）
+        const name =
+          a?.employeeName ||
+          a?.name ||
+          resolveToNameAny(a?.employee, empIdx) ||
+          resolveToNameAny(a?.employeeId, empIdx) ||
+          resolveToNameAny(a?.email, empIdx) ||
+          '';
+        if (!name || !String(name).trim()) return; // name が無ければスキップ
+        if (!tmp[pid]) tmp[pid] = new Set();
+        tmp[pid].add(String(name).trim());
+      });
+      setAssignMap(tmp);
+      return tmp;
+    } catch (e) {
+      console.log('[Schedule] ensureAssignmentsForMonth error', e);
+      return null;
+    }
+  }, [assignMap, monthStart, monthEnd, ensureEmployeeIndex]);
+
+  // ▼ 検索ロジック（query / projects / assignMap が変われば更新）
+  useEffect(() => {
+    const run = async () => {
+      const q = (query || '').trim().toLowerCase();
+      if (!q) { setResults([]); return; }
+      // 参加者名マップを準備（可能なら）
+      const aMap = await ensureAssignmentsForMonth();
+      const empIdx = await ensureEmployeeIndex();
+      const tokens = q.split(/\s+/).filter(Boolean).map(t => normalizeForSearch(t));
+      const inMonth = (p) => {
+        const s0 = fromTimestampOrString(p.startDate);
+        const e0 = fromTimestampOrString(p.endDate || p.startDate);
+        const s = new Date(s0.getFullYear(), s0.getMonth(), s0.getDate());
+        const e = new Date(e0.getFullYear(), e0.getMonth(), e0.getDate());
+        return !(e < monthStart || s > monthEnd);
+      };
+      const getCustomer = (p) =>
+        p?.customerName || p?.clientName || p?.customer || p?.client || p?.customer_name || '';
+      const getParticipants = (p) => {
+        // 1) 当月アサインが取れていればそれを使用
+        const pid = String(p?.id ?? '');
+        const set1 = (aMap && aMap[pid]) ? Array.from(aMap[pid]) : [];
+        // 2) プロジェクト側に候補があれば補完
+        //    代表的なキー名の総当たり（ID/オブジェクト/文字列に対応）
+        const list2Raw =
+          p?.participantNames ??
+          p?.participants ??
+          p?.participantsArray ??
+          p?.assignees ??
+          p?.assignedEmployees ??
+          p?.members ??
+          [];
+        const list2 = Array.isArray(list2Raw) ? list2Raw : Object.values(list2Raw || {});
+        // 何であっても name に解決（email / id も可）
+        const names2 = Array.isArray(list2)
+          ? list2.map(v => resolveToNameAny(v, empIdx)).filter(s => typeof s === 'string' && s.trim())
+          : [];
+        const all = new Set([...set1, ...names2].map(s => String(s)));
+        return Array.from(all);
+      };
+      const haystackOf = (p) => {
+        const customer = String(getCustomer(p) || '');
+        const parts = getParticipants(p).join(' ');
+        const raw = `${customer} ${parts}`;
+        return normalizeForSearch(raw);
+      };
+      const filtered = (projects || [])
+        .filter(p => inMonth(p))
+        .filter(p => {
+          const hs = haystackOf(p);
+          return tokens.every(t => hs.includes(t));
+        })
+        .slice(0, 100); // セーフガード
+      setResults(filtered);
+    };
+    run();
+  }, [query, projects, monthStart, monthEnd, ensureAssignmentsForMonth, ensureEmployeeIndex]);
 
   /**
    * 各「日」ごとにアクティブな予定を集め、優先度で上に詰める。
@@ -337,6 +539,93 @@ export default function ScheduleScreen({ navigation, route }) {
 
   return (
     <SafeAreaView edges={['top']} style={tw`flex-1 bg-white`}>
+      {/* ====== 検索バー ====== */}
+      <View style={tw`px-3 pt-3 pb-2 bg-white`}>
+        <View style={tw`flex-row items-center gap-2`}>
+          <View style={tw`flex-1 border border-gray-300 rounded-xl px-3 py-2`}>
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder="参加従業員名・顧客名で検索（当月）"
+              placeholderTextColor="#9CA3AF"
+              style={tw`text-base text-gray-900`}
+              returnKeyType="search"
+            />
+          </View>
+          <TouchableOpacity
+            onPress={() => setQuery('')}
+            style={tw`px-3 py-2 rounded-xl bg-gray-100`}
+            activeOpacity={0.8}
+          >
+            <Text style={tw`text-sm text-gray-700`}>クリア</Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={tw`mt-1 text-[10px] text-gray-500`}>検索対象：参加従業員・顧客名（当月範囲）</Text>
+      </View>
+
+      {/* ====== 検索結果パネル（あれば） ====== */}
+      {query.trim().length > 0 && (
+        <View style={tw`px-3 pb-2`}>
+          <View style={tw`border border-gray-200 rounded-2xl`}>
+            <View style={tw`px-3 py-2 border-b border-gray-200 bg-gray-50 rounded-t-2xl`}>
+              <Text style={tw`text-xs text-gray-700`}>
+                {results.length} 件ヒット
+              </Text>
+            </View>
+            <ScrollView style={{ maxHeight: 260 }} contentContainerStyle={tw`p-2`}>
+              {results.length === 0 ? (
+                <Text style={tw`text-xs text-gray-500 px-2 py-1`}>一致なし</Text>
+              ) : results.map((p) => {
+                  const title = String(p?.title || p?.name || '（無題）');
+                  const s0 = fromTimestampOrString(p.startDate);
+                  const e0 = fromTimestampOrString(p.endDate || p.startDate);
+                  const range = `${toDateString(s0)} 〜 ${toDateString(e0)}`;
+                  const customer =
+                    p?.customerName || p?.clientName || p?.customer || p?.client || '';
+                  const parts = (() => {
+                    const pid = String(p?.id ?? '');
+                    const aNames = (assignMap && assignMap[pid]) ? Array.from(assignMap[pid]) : [];
+                    const pRaw =
+                      p?.participantNames ??
+                      p?.participants ??
+                      p?.participantsArray ??
+                      p?.assignees ??
+                      p?.assignedEmployees ??
+                      p?.members ?? [];
+                    const pList = Array.isArray(pRaw) ? pRaw : Object.values(pRaw || {});
+                    const pNames = (pList || []).map(v => resolveToNameAny(v, employeeIndex || {})).filter(Boolean);
+                    const all = Array.from(new Set([...aNames, ...pNames].map(s => String(s))));
+                    return all.join(' / ');
+                  })();
+                  return (
+                    <View key={String(p.id || title)} style={tw`mb-2 p-3 rounded-xl bg-white border border-gray-200`}>
+                      <Text style={tw`text-sm font-bold text-gray-900`} numberOfLines={2}>{title}</Text>
+                      <Text style={tw`text-[11px] text-gray-600 mt-1`}>{range}</Text>
+                      {!!customer && (
+                        <Text style={tw`text-[11px] text-gray-700 mt-0.5`}>顧客：{customer}</Text>
+                      )}
+                      {!!parts && (
+                        <Text style={tw`text-[11px] text-gray-700 mt-0.5`}>参加：{parts}</Text>
+                      )}
+                      <View style={tw`mt-2 flex-row`}>
+                        <TouchableOpacity
+                          onPress={() => navigation.navigate('HomeStack', {
+                            screen: 'ProjectDetail',
+                            params: { projectId: p.id, userEmail },
+                          })}
+                          style={tw`px-3 py-2 rounded-xl bg-blue-600`}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={tw`text-white text-xs font-semibold`}>詳細を開く</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })}
+            </ScrollView>
+          </View>
+        </View>
+      )}    
       <CalendarList
         style={{ height: CAL_HEIGHT }}
         calendarHeight={CAL_HEIGHT}      
