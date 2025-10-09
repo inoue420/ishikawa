@@ -1,7 +1,7 @@
 // screens/phone/ScheduleScreen.js
 import React, { useEffect, useMemo, useState, useContext, useCallback, useRef } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { View, Text, TouchableOpacity, ActivityIndicator, Dimensions, TextInput, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, Dimensions, TextInput, ScrollView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import tw from 'twrnc';
 import { CalendarList, LocaleConfig } from 'react-native-calendars';
@@ -143,6 +143,8 @@ export default function ScheduleScreen({ navigation, route }) {
   const [results, setResults] = useState([]);
   const [assignMap, setAssignMap] = useState(null); // { [projectId]: Set<employeeName> }
   const [employeeIndex, setEmployeeIndex] = useState(null); // { byId, byEmail, byLoginId }
+  // 検索スコープ: 'all' | 'employees' | 'customers'
+  const [searchScope, setSearchScope] = useState('all');    
   const [refreshKey, setRefreshKey] = useState(0); // フォーカス時の再フェッチ用トリガ
 
   const cacheRef = useRef(new Map());
@@ -289,6 +291,9 @@ export default function ScheduleScreen({ navigation, route }) {
   }, [assignMap, monthStart, monthEnd, ensureEmployeeIndex]);
 
   // ▼ 検索ロジック（query / projects / assignMap が変われば更新）
+  const toggleScope = useCallback((mode) => {
+    setSearchScope((prev) => (prev === mode ? 'all' : mode));
+  }, []);
   useEffect(() => {
     const run = async () => {
       const q = (query || '').trim().toLowerCase();
@@ -329,10 +334,17 @@ export default function ScheduleScreen({ navigation, route }) {
         return Array.from(all);
       };
       const haystackOf = (p) => {
-        const customer = String(getCustomer(p) || '');
-        const parts = getParticipants(p).join(' ');
-        const raw = `${customer} ${parts}`;
-        return normalizeForSearch(raw);
+        // 事前に正規化しておく
+        const customer = normalizeForSearch(String(getCustomer(p) || ''));
+        const parts = normalizeForSearch(getParticipants(p).join(' '));
+        // スコープに応じて対象を限定
+        if (searchScope === 'employees') {
+          return parts;
+        }
+        if (searchScope === 'customers') {
+          return customer;
+        }
+        return `${customer}${parts}`;
       };
       const filtered = (projects || [])
         .filter(p => inMonth(p))
@@ -344,7 +356,8 @@ export default function ScheduleScreen({ navigation, route }) {
       setResults(filtered);
     };
     run();
-  }, [query, projects, monthStart, monthEnd, ensureAssignmentsForMonth, ensureEmployeeIndex]);
+  }, [query, projects, monthStart, monthEnd, ensureAssignmentsForMonth, ensureEmployeeIndex, searchScope]);
+
 
   /**
    * 各「日」ごとにアクティブな予定を集め、優先度で上に詰める。
@@ -548,7 +561,23 @@ export default function ScheduleScreen({ navigation, route }) {
               onChangeText={setQuery}
               placeholder="参加従業員名・顧客名で検索（当月）"
               placeholderTextColor="#9CA3AF"
-              style={tw`text-base text-gray-900`}
+              // 下端が欠けないように行高と縦パディングを十分に確保
+              style={[
+                tw`text-base text-gray-900`,
+                Platform.select({
+                  android: {
+                    paddingTop: 6,
+                    paddingBottom: 6,
+                    lineHeight: 22,
+                    textAlignVertical: 'center',
+                  },
+                  ios: {
+                    paddingTop: 8,
+                    paddingBottom: 8,
+                    lineHeight: 20,
+                  },
+                }),
+              ]}
               returnKeyType="search"
             />
           </View>
@@ -559,8 +588,30 @@ export default function ScheduleScreen({ navigation, route }) {
           >
             <Text style={tw`text-sm text-gray-700`}>クリア</Text>
           </TouchableOpacity>
+          {/* スコープトグル：従業員 */}
+          <TouchableOpacity
+            onPress={() => toggleScope('employees')}
+            style={tw`${searchScope==='employees' ? 'bg-blue-600' : 'bg-gray-100'} px-3 py-2 rounded-xl`}
+            activeOpacity={0.8}
+          >
+            <Text style={tw`text-sm ${searchScope==='employees' ? 'text-white' : 'text-gray-700'}`}>従業員</Text>
+          </TouchableOpacity>
+          {/* スコープトグル：顧客 */}
+          <TouchableOpacity
+            onPress={() => toggleScope('customers')}
+            style={tw`${searchScope==='customers' ? 'bg-blue-600' : 'bg-gray-100'} px-3 py-2 rounded-xl`}
+            activeOpacity={0.8}
+          >
+            <Text style={tw`text-sm ${searchScope==='customers' ? 'text-white' : 'text-gray-700'}`}>顧客</Text>
+          </TouchableOpacity>
         </View>
-        <Text style={tw`mt-1 text-[10px] text-gray-500`}>検索対象：参加従業員・顧客名（当月範囲）</Text>
+        {(() => {
+          const scopeLabel =
+            searchScope === 'employees' ? '参加従業員のみ' :
+            searchScope === 'customers' ? '顧客のみ' : '参加従業員・顧客名';
+          return <Text style={tw`mt-1 text-[10px] text-gray-500`}>検索対象：{scopeLabel}（当月範囲）</Text>;
+        })()}
+
       </View>
 
       {/* ====== 検索結果パネル（あれば） ====== */}
