@@ -36,31 +36,8 @@ export default function ManagerApprovalScreen({ route }) {
       const targetDate = dateKey(currentDate);
       let list = [];
       if (self.role === 'executive') {
-        // 役員宛（managerLoginId === self.loginId）の全件を取得
-        const allAssignedToExec = await fetchPendingForManager(self.loginId, targetDate);
-
-        // 役員直下の「部長」loginIdセット（小文字）を用意
-        const managerIds = new Set(
-          [...byLoginId.values()]
-            .filter(u =>
-              (u?.role === 'manager') &&
-              ((u?.managerLoginId || '').toLowerCase() === (self.loginId || '').toLowerCase())
-            )
-            .flatMap(u => [
-              (u?.loginId || '').toLowerCase(),   // 例: "テスト従業員b"
-              (u?.email   || '').toLowerCase(),   // 例: "b"（≒従業員docのIDと同じ値を使っている運用）
-            ].filter(Boolean))
-        );
-
-        // レコード側の申請者を loginId 基準で判定
-        // employeeId（loginId相当）> employeeLoginId（誤って名前が入る場合あり）の優先に変更
-        list = (allAssignedToExec || []).filter(r => {
-          // 打刻側は employeeId（英字ID）か、employeeLoginId（表示名の可能性あり）、または employeeEmail を優先順で採用
-          const empKey = String(
-            r.employeeId ?? r.employeeLoginId ?? r.employeeEmail ?? ''
-          ).toLowerCase();
-          return managerIds.has(empKey);
-        });
+        // 役員宛の申請をそのまま表示（直属従業員＝部長不在部門も含む）
+        list = await fetchPendingForManager(self.loginId, targetDate);
       } else {
         list = await fetchPendingForManager(self.loginId, targetDate);
       }

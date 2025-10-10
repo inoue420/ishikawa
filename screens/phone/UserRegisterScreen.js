@@ -75,14 +75,25 @@ export default function UserRegisterScreen() {
   useEffect(() => { loadUsers(); }, []);
 
   // 上長候補（従業員→部長、部長→役員）
+  // 部長不在部門のみ 役員承認を許可
   const candidateSuperiors = useMemo(() => {
     if (role === 'employee') {
+      if (division === '社員' && department) {
+        const managersInDept = users.filter(
+          u => (u.role === 'manager') && (u.department === department)
+        );
+        // 部長が居ればその部長のみ、居なければ役員のみ
+        return managersInDept.length > 0
+          ? managersInDept
+          : users.filter(u => u.role === 'executive');
+      }
+      // 部門が未選択 or 社員以外 → 従来どおり部長
       return users.filter(u => (u.role ?? 'employee') === 'manager');
     } else if (role === 'manager') {
       return users.filter(u => (u.role ?? 'employee') === 'executive');
     }
     return [];
-  }, [users, role]);
+  }, [users, role, division, department]);
 
   const onChangeRole = (newRole) => {
     setRole(newRole);
@@ -119,8 +130,22 @@ export default function UserRegisterScreen() {
     // 追加：上長の役割を厳密チェック（誤配線防止）
     const mgr = users.find(u => (u?.loginId || '').toLowerCase() === mgrId);
     if (role === 'employee') {
-      if (!mgr || mgr.role !== 'manager') {
-        return Alert.alert('入力エラー', '従業員の上長は「部長」のみ選択できます。');
+      if (division === '社員' && dept) {
+        // 部長がいれば部長のみ／いなければ役員のみ
+        if (hasManagerInDept) {
+          if (!mgr || mgr.role !== 'manager') {
+            return Alert.alert('入力エラー', 'この部門には部長が在籍しています。上長は「部長」を選択してください。');
+          }
+        } else {
+          if (!mgr || mgr.role !== 'executive') {
+            return Alert.alert('入力エラー', 'この部門は部長不在のため、上長は「役員」を選択してください。');
+          }
+        }
+      } else {
+        // 部門なし等は従来どおり部長のみ（必要に応じて調整可）
+        if (!mgr || mgr.role !== 'manager') {
+          return Alert.alert('入力エラー', '上長は「部長」を選択してください。');
+        }
       }
     }
     if (role === 'manager') {
@@ -212,8 +237,17 @@ export default function UserRegisterScreen() {
     );
   };
 
+  const hasManagerInDept = useMemo(() => {
+    if (role !== 'employee' || division !== '社員' || !department) return false;
+    return users.some(u => u.role === 'manager' && u.department === department);
+  }, [users, role, division, department]);
+
   const superiorLabel =
-    role === 'employee' ? '上長（部長 / loginId）' :
+    role === 'employee'
+      ? (division === '社員' && department
+          ? (hasManagerInDept ? '上長（部長 / loginId）' : '上長（役員 / loginId）')
+          : '上長（部長 / loginId）')
+      :
     role === 'manager'  ? '上長（役員 / loginId）' :
     '上長（なし）';
 
@@ -289,7 +323,7 @@ export default function UserRegisterScreen() {
               {candidateSuperiors.map(m => (
                 <Picker.Item
                   key={(m.loginId || m.email) ?? Math.random().toString(36)}
-                  label={`${m.name ?? m.loginId ?? m.email}${m.affiliation ? `（${m.affiliation}）` : ''}`}
+                  label={`${m.name ?? m.loginId ?? m.email}（${roleLabel(m.role)}${m.affiliation ? ` / ${m.affiliation}` : ''}）`}
                   value={m.loginId ?? ''}
                 />
               ))}
