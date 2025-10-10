@@ -2,7 +2,7 @@
   "expo": {
     "name": "ishikawa",
     "slug": "ishikawa",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "orientation": "default",
     "icon": "./assets/IKG_ICON.png",
     "userInterfaceStyle": "light",
@@ -32,12 +32,13 @@
       "icon": "./assets/IKG_ICON.png"
     },
     "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
-      },
       "edgeToEdgeEnabled": true,
-      "package": "com.inoue420.ishikawa"
+      "package": "com.inoue420.ishikawa",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/IKG_adaptive_foreground.png",
+        "backgroundColor": "#000000",
+        "monochromeImage": "./assets/IKG_adaptive_mono.png"
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"
