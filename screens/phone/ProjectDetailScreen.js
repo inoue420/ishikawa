@@ -71,6 +71,24 @@ const setMapToPlainObject = (mapObj) =>
   Object.fromEntries(
     Object.entries(mapObj || {}).map(([k, v]) => [k, Array.from(v || [])])
   );
+// ─────────────────────────────────────────
+// 事業部（department）グルーピング設定（Register画面と揃える）
+// UserRegisterScreen.js の DEPT_OPTIONS と同順
+const ALL_DEPT_OPTIONS = [
+  'イベント事業',
+  '飲食事業',
+  'ライフサポート事業',
+  '安全管理',
+  'ASHIBAのコンビニ事業',
+  'office',
+  'サービス',
+  '仮設・足場事業',
+  '役員',
+];
+// 表示対象をこの4部門に固定
+const ALLOWED_DEPTS = ['仮設・足場事業','イベント事業','ASHIBAのコンビニ事業','サービス'];
+const FALLBACK_DEPT = '(未設定)';
+// ─────────────────────────────────────────
 
 export default function ProjectDetailScreen({ route }) {
   const navigation = useNavigation();
@@ -134,6 +152,33 @@ export default function ProjectDetailScreen({ route }) {
   const [unavailableEmpMap, setUnavailableEmpMap] = useState({});         // { 'YYYY-MM-DD': Set<empId> }
   const [empAvailLoading, setEmpAvailLoading] = useState(false);
 
+  // 表示する事業部（4部門のみ）: 初期は「仮設・足場事業」だけON
+  const [visibleDeptSet, setVisibleDeptSet] = useState(new Set(['仮設・足場事業']));
+  // 事業部→従業員 のグルーピング（division === '社員' のみを対象）
+  const deptEmployeesOrdered = useMemo(() => {
+    const map = {};
+    for (const e of (employees || [])) {
+      const div = (e?.division || '').trim();
+      if (div === '社員') {
+        const dept = (e?.department || '').trim() || FALLBACK_DEPT;
+        if (!map[dept]) map[dept] = [];
+        map[dept].push(e);
+      }
+    }
+    // 表示順は ALL_DEPT_OPTIONS → その他（未設定等）
+    const ordered = {};
+    for (const d of ALL_DEPT_OPTIONS) if (map[d]?.length) ordered[d] = map[d];
+    for (const d of Object.keys(map)) if (!ordered[d]) ordered[d] = map[d];
+    return ordered;
+  }, [employees]);
+  // 表示対象は「選択された4部門 ∩ 従業員がいる部門」
+  const visibleDeptArray = useMemo(
+    () => ALLOWED_DEPTS.filter(
+      d => visibleDeptSet.has(d) && (deptEmployeesOrdered[d]?.length ?? 0) > 0
+    ),
+    [visibleDeptSet, deptEmployeesOrdered]
+  );
+ 
   // プロジェクトの開始/終了（Date）→ 期間配列
   const projStart = useMemo(() => toDateMaybe(project?.startDate), [project?.startDate]);
   const projEnd   = useMemo(() => toDateMaybe(project?.endDate) || toDateMaybe(project?.startDate), [project?.endDate, project?.startDate]);
@@ -832,6 +877,39 @@ export default function ProjectDetailScreen({ route }) {
         {/* 参加従業員（各日） */}
         <View style={tw`mt-5`}>
           <Text style={tw`text-lg font-bold`}>参加従業員</Text>
+
+          {/* 表示する事業部（4部門のみ） */}
+          <View style={tw`mb-3 p-2 border rounded`}>
+            <Text style={tw`mb-1`}>表示する事業部</Text>
+            <View style={tw`flex-row flex-wrap -mx-1`}>
+              {ALLOWED_DEPTS.map(dept => {
+                const selected = visibleDeptSet.has(dept);
+                return (
+                  <TouchableOpacity
+                    key={dept}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      setVisibleDeptSet(prev => {
+                        const next = new Set(prev);
+                        if (next.has(dept)) next.delete(dept); else next.add(dept);
+                        return next;
+                      });
+                    }}
+                    style={tw.style(
+                      'm-1 px-3 py-2 rounded border',
+                      selected ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'
+                    )}
+                  >
+                    <Text>{(selected ? '☑ ' : '☐ ') + dept}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <Text style={tw`text-xs text-gray-600 mt-1`}>
+              ※ チェックした事業部のみ、下の従業員一覧に表示されます（非社員は表示されません）。
+            </Text>
+          </View>
+
           {datesInRange.length === 0 ? (
             <Text style={tw`mt-2`}>開始日・終了日の設定が必要です。</Text>
           ) : (
@@ -854,30 +932,46 @@ export default function ProjectDetailScreen({ route }) {
               return (
                 <View key={y} style={tw`mt-3 p-3 border rounded`}>
                   <Text style={tw`font-bold mb-2`}>{d.toLocaleDateString()}</Text>
-                  <View style={tw`flex-row flex-wrap -mx-1`}>
-                    {employees.map(emp => {
-                      const isSel = cur.has?.(emp.id) || cur.includes?.(emp.id);
-                      const isBlocked = blocked.has(emp.id);
-                      return (
-                        <TouchableOpacity
-                          key={emp.id}
-                          disabled={isBlocked || empAvailLoading}
-                          onPress={() => onToggle(emp.id)}
-                          activeOpacity={0.7}
-                          style={tw.style(
-                            'm-1 px-3 py-2 rounded border',
-                            isBlocked
-                              ? 'bg-gray-200 border-gray-300 opacity-50'
-                              : (empAvailLoading
-                                  ? 'bg-gray-100 border-gray-300 opacity-60'
-                                  : (isSel ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'))
-                          )}
-                        >
-                          <Text>{(isSel ? '☑ ' : '☐ ') + (emp.name || '—')}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
+
+                  {visibleDeptArray.length === 0 && (
+                    <Text style={tw`text-gray-500`}>表示対象の事業部が選択されていません。</Text>
+                  )}
+                  {visibleDeptArray.map(dept => {
+                    const list = (deptEmployeesOrdered[dept] || []);
+                    return (
+                      <View key={`${y}-${dept}`} style={tw`mb-3`}>
+                        <Text style={tw`mb-1`}>【{dept}】</Text>
+                        {list.length === 0 ? (
+                          <Text style={tw`text-gray-500`}>該当従業員なし</Text>
+                        ) : (
+                          <View style={tw`flex-row flex-wrap -mx-1`}>
+                            {list.map(emp => {
+                              const isSel = cur.has?.(emp.id) || cur.includes?.(emp.id);
+                              const isBlocked = blocked.has(emp.id);
+                              return (
+                                <TouchableOpacity
+                                  key={emp.id}
+                                  disabled={isBlocked || empAvailLoading}
+                                  onPress={() => onToggle(emp.id)}
+                                  activeOpacity={0.7}
+                                  style={tw.style(
+                                    'm-1 px-3 py-2 rounded border',
+                                    isBlocked
+                                      ? 'bg-gray-200 border-gray-300 opacity-50'
+                                      : (empAvailLoading
+                                          ? 'bg-gray-100 border-gray-300 opacity-60'
+                                          : (isSel ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'))
+                                  )}
+                                >
+                                  <Text>{(isSel ? '☑ ' : '☐ ') + (emp.name || '—')}</Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+                        )}
+                      </View>
+                    );
+                  })}
                 </View>
               );
             })
