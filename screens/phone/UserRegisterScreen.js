@@ -11,7 +11,7 @@ import {
 } from '../../firestoreService';
 
 const DIVISION_OPTIONS = ['外注', '社員', 'パート', 'アルバイト'];
-const DEPT_OPTIONS = ['営業', '工事', '管理', 'office', '安全' ]; // ★ 追加：事業部
+const DEPT_OPTIONS = ['イベント事業', '飲食事業', 'ライフサポート事業', '安全管理', 'ASHIBAのコンビニ事業', 'office', 'サービス', '仮設・足場事業', '役員' ]; // ★ 追加：事業部
 
 // 役割（役員 / 部長 / 従業員）
 const ROLE_OPTIONS = [

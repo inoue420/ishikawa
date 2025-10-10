@@ -25,11 +25,12 @@ import { getApp } from 'firebase/app';
 
 // ─────────────────────────────────────────────
 // 役割判定（統一ロジック）
-//   executive / manager / 事務（department==='事務'）を特権ユーザー扱い
+//   executive / manager / office（department==='office'）を特権ユーザー扱い
 // ─────────────────────────────────────────────
 export function isPrivUser(me) {
   if (!me) return false;
-  return me.role === 'executive' || me.role === 'manager' || me.department === '事務';
+  const dept = String(me.department ?? '').toLowerCase();
+  return me.role === 'executive' || me.role === 'manager' || dept === 'office';
 }
 
 // Base64 -> Uint8Array（atob/Buffer 非依存で動く純JSデコーダ）
