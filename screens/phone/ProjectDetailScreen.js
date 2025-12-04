@@ -649,8 +649,6 @@ export default function ProjectDetailScreen({ route }) {
         });
         const logs = await fetchEditLogs(projectId, date);
         setEditLogs(logs);
-        debugLogList('afterSaveParticipants', logs);
-        debugLogList('afterSaveParticipants', logs, { projectId, date });
       } catch (logErr) {
         console.log('[participants addEditLog] error', logErr);
       } 
@@ -793,8 +791,6 @@ export default function ProjectDetailScreen({ route }) {
           if (cancelled) return;
           setProject(proj);
           setEditLogs(logs);
-          debugLogList('focus', logs);
-          debugLogList('focus', logs, { projectId, date });
           // 画面の即時一貫性のため、プロジェクトにキャッシュされた計画で一旦プレフィル
           if (proj?.participantPlan && Object.keys(proj.participantPlan).length) {
             const next = {};
