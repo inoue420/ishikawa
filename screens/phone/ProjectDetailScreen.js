@@ -30,23 +30,10 @@ import {
   addProjectComment,
   fetchProjectComments,
   findEmployeeByIdOrEmail,
-  setProject as upsertProject,
   deleteProject,  
-  fetchProjectsOverlappingRange,
-} from '../../firestoreService';
-import {
   fetchVehicles,
-  fetchVehicleBlocksOverlapping,
-  fetchReservationsByYmdRange,
-  fetchReservationsForProject,
-  saveProjectVehiclePlan,
-  fetchAssignmentsByYmdRange,
-  fetchAssignmentsForProject,
-  saveProjectParticipantPlan,
-  setEmployeeAssignment,
-  clearAssignmentsForProject,
 } from '../../firestoreService';
-import { Timestamp } from 'firebase/firestore';
+// Timestamp はもう不要なので削除
 
 
 // 追加：Firestore Timestamp/Date を安全に Date|null へ
@@ -58,36 +45,29 @@ const toDateMaybe = (v) => {
     return null;
   }
 };
-// 日付ヘルパー
-const dateOnly = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-const toYmd = (d) => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}`;
-};
-// Set をログしやすい形（配列）に変換
-const setMapToPlainObject = (mapObj) =>
-  Object.fromEntries(
-    Object.entries(mapObj || {}).map(([k, v]) => [k, Array.from(v || [])])
-  );
-// ─────────────────────────────────────────
-// 事業部（department）グルーピング設定（Register画面と揃える）
-// UserRegisterScreen.js の DEPT_OPTIONS と同順
-const ALL_DEPT_OPTIONS = [
-  'イベント事業',
-  '飲食事業',
-  'ライフサポート事業',
-  '安全管理',
-  'ASHIBAのコンビニ事業',
-  'office',
-  'サービス',
-  '仮設・足場事業',
-  '役員',
+
+// ── プロジェクトステータス（Register画面と同じ定義） ──
+const STATUS_OPTIONS = [
+  { value: 'prospect',    label: '見込み' },
+  { value: 'quoted',      label: '見積提出済' },
+  { value: 'ordered',     label: '受注確定' },
+  { value: 'preparing',   label: '準備中' },
+  { value: 'in_progress', label: '施工中' },
+  { value: 'completed',   label: '完了' },
+  { value: 'billed',      label: '請求済' },
+  { value: 'cancelled',   label: '中止' },
 ];
-// 表示対象をこの4部門に固定
-const ALLOWED_DEPTS = ['仮設・足場事業','イベント事業','ASHIBAのコンビニ事業','サービス'];
-const FALLBACK_DEPT = '(未設定)';
+
+// ── 工程ステータス（Register画面と揃える） ──
+const WORK_STATUS_TYPES = [
+  { key: 'assembly',   label: '組立' },
+ { key: 'dismantle',  label: '解体' },
+  { key: 'additional', label: '追加工事' },
+  { key: 'regular',    label: '常用' },
+  { key: 'correction', label: '是正' },
+  { key: 'pickup',     label: '引き上げ' },
+];
+
 // ─────────────────────────────────────────
 
 export default function ProjectDetailScreen({ route }) {
@@ -138,57 +118,16 @@ export default function ProjectDetailScreen({ route }) {
   const [commentText, setCommentText] = useState('');
   const [pendingImage, setPendingImage] = useState(null); // { uri }
   const [sending, setSending] = useState(false);
-  // 車両まわり
+  // 車両マスタ（作業ステータス表示用）
   const [vehicles, setVehicles] = useState([]);
   const vehiclesById = useMemo(
     () => Object.fromEntries((vehicles || []).map(v => [v.id, v])),
     [vehicles]
   );
-  // 選択と空き状況
-  const [vehicleSelections, setVehicleSelections] = useState({}); // { 'YYYY-MM-DD': { sales?: id, cargo?: id } }
-  const [unavailableMap, setUnavailableMap] = useState({});       // { 'YYYY-MM-DD': Set(vehicleId) }
-  const [availLoading, setAvailLoading] = useState(false); 
-  const [participantSelections, setParticipantSelections] = useState({}); // { 'YYYY-MM-DD': Set<empId> }
-  const [unavailableEmpMap, setUnavailableEmpMap] = useState({});         // { 'YYYY-MM-DD': Set<empId> }
-  const [empAvailLoading, setEmpAvailLoading] = useState(false);
+  // 作業ステータス（閲覧用）
+  const [workStatuses, setWorkStatuses] = useState([]); // FirestoreのworkStatusesをそのまま保持
+  const [expandedStatusType, setExpandedStatusType] = useState(null); // 表示するタイプ（assembly等）
 
-  // 表示する事業部（4部門のみ）: 初期は「仮設・足場事業」だけON
-  const [visibleDeptSet, setVisibleDeptSet] = useState(new Set(['仮設・足場事業']));
-  // 事業部→従業員 のグルーピング（division === '社員' のみを対象）
-  const deptEmployeesOrdered = useMemo(() => {
-    const map = {};
-    for (const e of (employees || [])) {
-      const div = (e?.division || '').trim();
-      if (div === '社員') {
-        const dept = (e?.department || '').trim() || FALLBACK_DEPT;
-        if (!map[dept]) map[dept] = [];
-        map[dept].push(e);
-      }
-    }
-    // 表示順は ALL_DEPT_OPTIONS → その他（未設定等）
-    const ordered = {};
-    for (const d of ALL_DEPT_OPTIONS) if (map[d]?.length) ordered[d] = map[d];
-    for (const d of Object.keys(map)) if (!ordered[d]) ordered[d] = map[d];
-    return ordered;
-  }, [employees]);
-  // 表示対象は「選択された4部門 ∩ 従業員がいる部門」
-  const visibleDeptArray = useMemo(
-    () => ALLOWED_DEPTS.filter(
-      d => visibleDeptSet.has(d) && (deptEmployeesOrdered[d]?.length ?? 0) > 0
-    ),
-    [visibleDeptSet, deptEmployeesOrdered]
-  );
- 
-  // プロジェクトの開始/終了（Date）→ 期間配列
-  const projStart = useMemo(() => toDateMaybe(project?.startDate), [project?.startDate]);
-  const projEnd   = useMemo(() => toDateMaybe(project?.endDate) || toDateMaybe(project?.startDate), [project?.endDate, project?.startDate]);
-  const datesInRange = useMemo(() => {
-    if (!projStart || !projEnd) return [];
-    const s0 = dateOnly(projStart), e0 = dateOnly(projEnd);
-    const arr = [];
-    for (let d = new Date(s0); d <= e0; d.setDate(d.getDate() + 1)) arr.push(new Date(d));
-    return arr;
-  }, [projStart, projEnd]);
 
   // id→name の辞書と、参加者名リスト
   const nameById = useMemo(
@@ -199,6 +138,13 @@ export default function ProjectDetailScreen({ route }) {
     () => (project?.participants ?? []).map(id => nameById[id]).filter(Boolean),
     [project?.participants, nameById]
   );
+
+  // 案件ステータスの表示ラベル
+  const statusLabel = useMemo(() => {
+    if (!project?.status) return '未設定';
+    const hit = STATUS_OPTIONS.find(o => o.value === project.status);
+    return hit?.label || project.status;
+  }, [project?.status]);
 
   // usages と materialsList から「大分類→品名1→アイテム配列」を生成（既存ロジック維持）
   const usageGroups = useMemo(() => {
@@ -265,6 +211,22 @@ export default function ProjectDetailScreen({ route }) {
       }
     })();
   }, [projectId, date]);
+
+  // Firestoreに保存された作業ステータスをローカルstateに反映
+  useEffect(() => {
+    if (!project || !Array.isArray(project.workStatuses)) {
+      setWorkStatuses([]);
+      setExpandedStatusType(null);
+     return;
+    }
+    const ws = project.workStatuses.map(ws => ({
+      ...ws,
+      startDate: toDateMaybe(ws.startDate),
+      endDate: toDateMaybe(ws.endDate),
+    }));
+    setWorkStatuses(ws);
+  }, [project?.workStatuses]);  
+
   // 車両マスタ
   useEffect(() => {
     (async () => {
@@ -276,131 +238,7 @@ export default function ProjectDetailScreen({ route }) {
       }
     })();
   }, []);  
-  // 保存済み vehiclePlan があればプリフィル
-  useEffect(() => {
-    if (project?.vehiclePlan && Object.keys(project.vehiclePlan).length) {
-      setVehicleSelections(project.vehiclePlan);
-    }
-  }, [project?.vehiclePlan]);
-  // 参加者：保存済みがあればプリフィル
-  useEffect(() => {
-    if (project?.participantPlan && Object.keys(project.participantPlan).length) {
-      const next = {};
-      Object.entries(project.participantPlan).forEach(([dy, arr]) => next[dy] = new Set(arr || []));
-      setParticipantSelections(next);
-    }
-  }, [project?.participantPlan]);
 
-  // 期間の空き状況（“同じ日なら不可”）
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (datesInRange.length === 0) {
-        setUnavailableMap({});
-        setVehicleSelections(project?.vehiclePlan || {});
-        return;
-      }
-      setAvailLoading(true);
-      const s = datesInRange[0];
-      const e = datesInRange[datesInRange.length - 1];
-      const startKey = toYmd(s);
-      const endKey   = toYmd(e);
-      const startTs  = Timestamp.fromDate(new Date(`${startKey}T00:00:00`));
-      const endTs    = Timestamp.fromDate(new Date(`${endKey}T23:59:59.999`));
-      try {
-        const [blocks, reservations] = await Promise.all([
-          fetchVehicleBlocksOverlapping(startTs, endTs),
-          fetchReservationsByYmdRange(startKey, endKey),
-        ]);
-
-      // ymd -> Set<vehicleId>
-      const map = {};
-      datesInRange.forEach(d => { map[toYmd(d)] = new Set(); });
-
-      // 車検/修理：その日の 0:00–23:59 と重なれば不可
-      for (const b of blocks) {
-        const bs = b.startDate?.toDate?.() ?? new Date(b.startDate);
-        const be = b.endDate?.toDate?.()   ?? new Date(b.endDate);
-        for (const d of datesInRange) {
-          const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0);
-          const dayEnd   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23,59,59,999);
-          if (dayStart <= be && bs <= dayEnd) {
-            map[toYmd(d)].add(b.vehicleId);
-          }
-        }
-      }
-      // 他プロジェクトの予約：同じ日なら不可
-      for (const r of reservations) {
-        if (r.projectId === projectId) continue; // 自案件は編集のため許可
-        const dy = r.dateKey || toYmd(r.date?.toDate?.() ?? new Date(r.date));
-        if (map[dy]) map[dy].add(r.vehicleId);
-      }
-      if (!cancelled) setUnavailableMap(map);
-
-      // プリフィル：保存済みがあれば最優先、なければ自案件の予約から推定
-      if (project?.vehiclePlan && Object.keys(project.vehiclePlan).length) {
-        if (!cancelled) setVehicleSelections(project.vehiclePlan);
-      } else {
-        const mine = await fetchReservationsForProject(projectId);
-        const next = {};
-        for (const r of mine) {
-          const dy = r.dateKey || toYmd(r.date?.toDate?.() ?? new Date(r.date));
-          const v  = vehiclesById[r.vehicleId];
-          const t  = (v?.vehicleType || 'sales'); // 'sales' | 'cargo'
-          next[dy] = { ...(next[dy] || {}), [t]: r.vehicleId };
-        }
-        if (!cancelled) setVehicleSelections(next);
-      }
-      } catch (e) {
-        console.log('[availability] error', e);
-      } finally {
-        if (!cancelled) setAvailLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [projStart?.getTime(), projEnd?.getTime(), projectId, project?.vehiclePlan, vehiclesById]);
-  // 参加者の空き状況（同じ日・他案件割当は不可）
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (datesInRange.length === 0) {
-        setUnavailableEmpMap({});
-        setParticipantSelections(project?.participantPlan || {});
-        return;
-      }
-      setEmpAvailLoading(true);
-      const s = datesInRange[0], e = datesInRange[datesInRange.length - 1];
-      const startKey = toYmd(s), endKey = toYmd(e);
-      try {
-        const assignments = await fetchAssignmentsByYmdRange(startKey, endKey);
-        const map = {};
-        datesInRange.forEach(d => { map[toYmd(d)] = new Set(); });
-        for (const a of assignments) {
-          if (a.projectId === projectId) continue;
-          const dy = a.dateKey || toYmd(a.date?.toDate?.() ?? new Date(a.date));
-          if (map[dy]) map[dy].add(a.employeeId);
-        }
-        if (!cancelled) setUnavailableEmpMap(map);
-        // プリフィル：保存済みがなければ自案件割当を推定
-        if (!(project?.participantPlan && Object.keys(project.participantPlan).length)) {
-          const mine = await fetchAssignmentsForProject(projectId);
-          const next = {};
-          for (const r of mine) {
-            const dy = r.dateKey || toYmd(r.date?.toDate?.() ?? new Date(r.date));
-            const set = new Set(next[dy] || []);
-            set.add(r.employeeId);
-            next[dy] = set;
-          }
-          if (!cancelled) setParticipantSelections(next);
-        }
-      } catch (e) {
-        console.log('[participants availability] error', e);
-      } finally {
-        if (!cancelled) setEmpAvailLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [projStart?.getTime(), projEnd?.getTime(), projectId, project?.participantPlan]);
 
 
   // 画像を選ぶ（送信時にまとめて投稿）
@@ -491,183 +329,12 @@ export default function ProjectDetailScreen({ route }) {
       setSending(false);
     }
   };
-  const onPickVehicle = (ymd, type, vehicleId) => {
-    if (availLoading) return;
-    const blocked = !!vehicleId && unavailableMap[ymd]?.has(vehicleId);
-    if (blocked) {
-      Alert.alert('選択不可', 'この日は選択した車両を使用できません（既予約／車検・修理）');
-      return;
-    }
-    setVehicleSelections(prev => ({
-      ...prev,
-      [ymd]: { ...(prev[ymd] || {}), [type]: vehicleId || undefined }
-    }));
-  };
-  // ※ 競合チェックは saveProjectVehiclePlan / saveProjectParticipantPlan 内でTx検証される前提。
-  //   未使用の checkVehicleConflicts は削除（fetchReservationsInRange 未インポートのため将来の誤用を防止）。
-  const handleSaveVehicles = async () => {
-    try {
-      const { by, byName } = await resolveCurrentUser();
-      // 0) 保存ペイロード生成（全日付キーを必ず含める：nullはクリア指示）
-      const vehiclePlan = {};
-      (datesInRange || []).forEach((d) => {
-        const ymd = toYmd(d);
-        const sel = vehicleSelections?.[ymd] || {};
-        vehiclePlan[ymd] = {
-          sales: sel?.sales ?? null,
-          cargo: sel?.cargo ?? null,
-        };
-      });
 
-
-      // 1) 予約保存（Tx + 決め打ちID）※衝突時は例外
-      await saveProjectVehiclePlan(projectId, vehiclePlan, datesInRange);
-      // 2) プロジェクト側のキャッシュを更新
-      await upsertProject(projectId, { vehiclePlan }, { by, byName });
-      // 3) サーバ状態から再読込してUIへ確実に反映
-      try {
-        const mine = await fetchReservationsForProject(projectId);
-        const next = {};
-        for (const r of mine) {
-          const dy = r.dateKey || toYmd(r.date?.toDate?.() ?? new Date(r.date));
-          const v  = vehiclesById[r.vehicleId];
-          const t  = (v?.vehicleType || 'sales'); // 'sales' | 'cargo'
-          next[dy] = { ...(next[dy] || {}), [t]: r.vehicleId };
-        }
-        // 予約が無い日は null で埋めてローカルもクリア
-        (datesInRange || []).forEach((d) => {
-          const dy = toYmd(d);
-          const sel = next[dy] || {};
-          next[dy] = { sales: sel.sales ?? null, cargo: sel.cargo ?? null };
-        });
-        setVehicleSelections(next);
-      } catch (re) {
-        console.log('[reload reservations after save] error', re);
-      }
-      // 4) 編集履歴（失敗しても保存は成功にする）
-      try {
-        await addEditLog({
-          projectId,
-          date,
-          dateKey: date,
-          action: 'update',
-          target: 'vehicles',
-          targetId: null,
-          by,
-          byName
-        });
-        const logs = await fetchEditLogs(projectId, date);
-        setEditLogs(logs);
-      } catch (logErr) {
-        console.log('[vehicles addEditLog] error', logErr);
-      } 
-      Alert.alert('保存しました', '車両割当てを更新しました。');
-      // ローカル state も同期
-      setProject(p => ({ ...(p || {}), vehiclePlan }));
-    } catch (e) {
-      console.error('[save vehicles] error', e);
-      const msg = String(e?.message || e);
-      if (msg.startsWith('CONFLICT')) {
-        Alert.alert('車両の競合', '他のプロジェクトが同じ日・同じ車両を予約しています。\n別の車両を選択してください。');
-      } else {
-        Alert.alert('保存に失敗しました');
-      }
-    }
-  };
-
-  const handleSaveParticipants = async () => {
-    try {
-      const { by, byName } = await resolveCurrentUser();
-      console.log('[addEditLog] participants payload', { projectId, date, by, byName });
-      // 画面上の選択 → 保存ペイロード { ymd: string[] }（全日付キーを必ず含め、空配列はクリア指示）
-      const plan = {};
-      (datesInRange || []).forEach((d) => {
-        const dy = toYmd(d);
-        const selected = participantSelections?.[dy];
-        const arr = Array.isArray(selected) ? selected : Array.from(selected || []);
-        plan[dy] = arr; // 空配列ならその日の割当をクリア
-      });
-      // まずはトランザクションAPI（推奨）
-      let usedFallback = false;
-      try {
-        if (typeof saveProjectParticipantPlan === 'function') {
-          await saveProjectParticipantPlan(projectId, plan, datesInRange);
-        } else {
-          throw new Error('saveProjectParticipantPlan is not a function');
-        }
-      } catch (err) {
-        const msg = String(err?.message || err);
-        if (msg.startsWith('CONFLICT')) {
-          // 競合はそのまま上位でハンドリング
-          throw err;
-        }
-        // フォールバック：一旦この案件の割当を全削除 → 期間分だけ再作成
-        usedFallback = true;
-        await clearAssignmentsForProject(projectId);
-        for (const [dy, arr] of Object.entries(plan)) {
-          for (const empId of arr) {
-            const dateMidnight = new Date(`${dy}T00:00:00`);
-            await setEmployeeAssignment(projectId, dateMidnight, empId);
-          }
-        }
-      }
-
-      // projects にもキャッシュ保存（一覧等で使用）
-      const union = Array.from(new Set(Object.values(plan).flat()));
-      await upsertProject(projectId, { participantPlan: plan, participants: union }, { by, byName });
-      setProject(p => ({ ...(p || {}), participantPlan: plan, participants: union }));
-      // 実際に保存された割当を再読込してUIへ確実に反映
-      try {
-        const mine = await fetchAssignmentsForProject(projectId);
-        const next = {};
-        for (const r of mine) {
-          const dy = r.dateKey || toYmd(r.date?.toDate?.() ?? new Date(r.date));
-          const s = new Set(next[dy] || []);
-          s.add(r.employeeId);
-          next[dy] = s;
-        }
-        // 割当が無い日は空Setで埋め、UI側でも未選択を可視化
-        (datesInRange || []).forEach((d) => {
-          const dy = toYmd(d);
-          next[dy] = next[dy] || new Set();
-        });
-        setParticipantSelections(next);
-      } catch (re) {
-        console.log('[reload assignments after save] error', re);
-      }
-      // 編集履歴（失敗しても保存は成功にする）
-      try {
-        await addEditLog({
-          projectId,
-          date,
-          dateKey: date,          // 念のため dateKey も付与（fetch 側がどちらで見ていてもヒット）
-          action: 'update',
-          target: 'participants',
-          targetId: null,         // ★ 重要：undefinedを避ける
-          by,
-          byName
-        });
-        const logs = await fetchEditLogs(projectId, date);
-        setEditLogs(logs);
-      } catch (logErr) {
-        console.log('[participants addEditLog] error', logErr);
-      } 
-      Alert.alert('保存しました', '参加従業員の割当てを更新しました。');
-    } catch (e) {
-      console.error('[save participants] error', e);
-      const msg = String(e?.message || e);
-      if (msg.startsWith('CONFLICT')) {
-        Alert.alert('参加者の競合', '他のプロジェクトが同じ日に同じ従業員を割当済みです。\n別の従業員を選択してください。');
-      } else {
-        Alert.alert('保存に失敗しました');
-      }
-    }
-  }; 
 
   // 追加：右上メニュー（編集・コピー・削除）
   const openActionMenu = useCallback(() => {
     const onEdit = () => {
-      // 編集：登録フォームに既存値を事前入力して遷移
+      // 編集：プロジェクトオブジェクトをそのまま初期値として渡す
       const src = project || {};
       navigation.navigate('Profile', {
         screen: 'ProjectRegister',
@@ -676,32 +343,14 @@ export default function ProjectDetailScreen({ route }) {
           projectId: src?.id,
           date,
           userEmail: userEmail ?? null,
-          initialValues: {
-            name: src.name ?? null,
-            clientName: src.clientName ?? null,
-            startDate: toDateMaybe(src.startDate),
-            endDate: toDateMaybe(src.endDate),
-            sales: src.sales ?? null,
-            survey: src.survey ?? null,
-            design: src.design ?? null,
-            management: src.management ?? null,
-            participants: Array.isArray(src.participants) ? [...src.participants] : [],
-            orderAmount: src.orderAmount ?? null,
-            travelCost: src.travelCost ?? null,
-            miscExpense: src.miscExpense ?? null,
-            areaSqm: src.areaSqm ?? null,
-            projectType: src.projectType ?? null,
-            invoiceAmount: src.invoiceAmount ?? null,
-            invoiceStatus: src.invoiceStatus ?? null,
-            isMilestoneBilling: src.isMilestoneBilling ?? null,
-            status: src.status ?? null,
-          },
+          // ★ src には workStatuses / location / visibility / vehiclePlan / participantPlan 等も含まれる
+          initialValues: src,
         },
       });
     };
 
     const onCopy = () => {
-      // コピー：登録画面の左フォームを事前入力して遷移（ここでは作成しない）
+      // コピー：こちらもプロジェクトを丸ごと渡す（Register 側で(コピー)付与
       const src = project || {};
       navigation.navigate('Profile', {
         screen: 'ProjectRegister',
@@ -709,26 +358,7 @@ export default function ProjectDetailScreen({ route }) {
           mode: 'copy',
           date,
           userEmail: userEmail ?? null,
-          initialValues: {
-            name: src.name ?? null,
-            clientName: src.clientName ?? null,
-            startDate: toDateMaybe(src.startDate),
-            endDate: toDateMaybe(src.endDate),
-            sales: src.sales ?? null,
-            survey: src.survey ?? null,
-            design: src.design ?? null,
-            management: src.management ?? null,
-            participants: Array.isArray(src.participants) ? [...src.participants] : [],
-            orderAmount: src.orderAmount ?? null,
-            travelCost: src.travelCost ?? null,
-            miscExpense: src.miscExpense ?? null,
-            areaSqm: src.areaSqm ?? null,
-            projectType: src.projectType ?? null,
-            invoiceAmount: src.invoiceAmount ?? null,
-            invoiceStatus: src.invoiceStatus ?? null,
-            isMilestoneBilling: src.isMilestoneBilling ?? null,
-            status: src.status ?? null,
-          },
+          initialValues: src,
         },
       });
     };
@@ -791,16 +421,6 @@ export default function ProjectDetailScreen({ route }) {
           if (cancelled) return;
           setProject(proj);
           setEditLogs(logs);
-          // 画面の即時一貫性のため、プロジェクトにキャッシュされた計画で一旦プレフィル
-          if (proj?.participantPlan && Object.keys(proj.participantPlan).length) {
-            const next = {};
-            Object.entries(proj.participantPlan).forEach(([dy, arr]) => next[dy] = new Set(arr || []));
-            setParticipantSelections(next);
-          }
-          if (proj?.vehiclePlan && Object.keys(proj.vehiclePlan).length) {
-            setVehicleSelections(proj.vehiclePlan);
-          }
-          // ※ 空き状況/予約の再評価は projStart/projEnd 変化で既存 useEffect が自動実行
         } catch (e) {
           console.log('[focus -> reload project & logs] error', e);
         }
@@ -859,7 +479,22 @@ export default function ProjectDetailScreen({ route }) {
   return (
     <SafeAreaView edges={['top']} style={tw`flex-1`}>
       <ScrollView contentContainerStyle={tw`p-4 pb-28`}>
-        <Text style={tw`text-xl font-bold`}>プロジェクト詳細</Text>
+        {/* プロジェクト名 + ステータス */}
+        <View style={tw`mb-3`}>
+          <View style={tw`flex-row flex-wrap items-center`}>
+            <Text style={tw`text-xl font-bold mr-2`}>
+              {project?.name || '（名称未設定）'}
+            </Text>
+            {/* 「見込み」はバッジ非表示 */}
+            {project?.status && project.status !== 'prospect' && (
+              <View style={tw`px-2 py-1 rounded-full bg-blue-100 border border-blue-300`}>
+                <Text style={tw`text-xs`}>{statusLabel}</Text>
+              </View>
+            )}
+          </View>
+          <Text style={tw`text-xs text-gray-500 mt-1`}>プロジェクト詳細</Text>
+        </View>
+
         <Text>営業担当: {employees.find(e => e.id === project?.sales)?.name || '—'}</Text>
         <Text>現場調査担当: {employees.find(e => e.id === project?.survey)?.name || '—'}</Text>
         <Text>設計担当: {employees.find(e => e.id === project?.design)?.name || '—'}</Text>
@@ -869,193 +504,115 @@ export default function ProjectDetailScreen({ route }) {
           {participantNames.length ? ` ${participantNames.join('、')}` : ' —'}
         </Text>
 
-        {/* ===== 車両（参加従業員の下） ===== */}
-        {/* 参加従業員（各日） */}
-        <View style={tw`mt-5`}>
-          <Text style={tw`text-lg font-bold`}>参加従業員</Text>
 
-          {/* 表示する事業部（4部門のみ） */}
-          <View style={tw`mb-3 p-2 border rounded`}>
-            <Text style={tw`mb-1`}>表示する事業部</Text>
-            <View style={tw`flex-row flex-wrap -mx-1`}>
-              {ALLOWED_DEPTS.map(dept => {
-                const selected = visibleDeptSet.has(dept);
-                return (
-                  <TouchableOpacity
-                    key={dept}
-                    activeOpacity={0.7}
-                    onPress={() => {
-                      setVisibleDeptSet(prev => {
-                        const next = new Set(prev);
-                        if (next.has(dept)) next.delete(dept); else next.add(dept);
-                        return next;
-                      });
-                    }}
-                    style={tw.style(
-                      'm-1 px-3 py-2 rounded border',
-                      selected ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'
-                    )}
-                  >
-                    <Text>{(selected ? '☑ ' : '☐ ') + dept}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            <Text style={tw`text-xs text-gray-600 mt-1`}>
-              ※ チェックした事業部のみ、下の従業員一覧に表示されます（非社員は表示されません）。
+        {/* ===== 作業ステータス（閲覧のみ） ===== */}
+        <View style={tw`mt-4`}>
+          <Text style={tw`text-lg font-bold mb-1`}>作業ステータス</Text>
+          {workStatuses.length === 0 ? (
+            <Text style={tw`text-gray-500`}>
+              登録された作業ステータスはありません。
             </Text>
-          </View>
-
-          {datesInRange.length === 0 ? (
-            <Text style={tw`mt-2`}>開始日・終了日の設定が必要です。</Text>
           ) : (
-            datesInRange.map((d) => {
-              const y = toYmd(d);
-              const blocked = unavailableEmpMap[y] || new Set();
-              const cur = participantSelections[y] || new Set();
-              const onToggle = (empId) => {
-                if (empAvailLoading) return;
-                if (blocked.has(empId)) {
-                  Alert.alert('選択不可', 'この日は他プロジェクトで割当済みの従業員です');
-                  return;
-                }
-                setParticipantSelections(prev => {
-                  const s = new Set(Array.from(prev[y] || []));
-                  if (s.has(empId)) s.delete(empId); else s.add(empId);
-                  return { ...prev, [y]: s };
-                });
-              };
-              return (
-                <View key={y} style={tw`mt-3 p-3 border rounded`}>
-                  <Text style={tw`font-bold mb-2`}>{d.toLocaleDateString()}</Text>
-
-                  {visibleDeptArray.length === 0 && (
-                    <Text style={tw`text-gray-500`}>表示対象の事業部が選択されていません。</Text>
-                  )}
-                  {visibleDeptArray.map(dept => {
-                    const list = (deptEmployeesOrdered[dept] || []);
-                    return (
-                      <View key={`${y}-${dept}`} style={tw`mb-3`}>
-                        <Text style={tw`mb-1`}>【{dept}】</Text>
-                        {list.length === 0 ? (
-                          <Text style={tw`text-gray-500`}>該当従業員なし</Text>
-                        ) : (
-                          <View style={tw`flex-row flex-wrap -mx-1`}>
-                            {list.map(emp => {
-                              const isSel = cur.has?.(emp.id) || cur.includes?.(emp.id);
-                              const isBlocked = blocked.has(emp.id);
-                              return (
-                                <TouchableOpacity
-                                  key={emp.id}
-                                  disabled={isBlocked || empAvailLoading}
-                                  onPress={() => onToggle(emp.id)}
-                                  activeOpacity={0.7}
-                                  style={tw.style(
-                                    'm-1 px-3 py-2 rounded border',
-                                    isBlocked
-                                      ? 'bg-gray-200 border-gray-300 opacity-50'
-                                      : (empAvailLoading
-                                          ? 'bg-gray-100 border-gray-300 opacity-60'
-                                          : (isSel ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'))
-                                  )}
-                                >
-                                  <Text>{(isSel ? '☑ ' : '☐ ') + (emp.name || '—')}</Text>
-                                </TouchableOpacity>
-                              );
-                            })}
-                          </View>
-                        )}
-                      </View>
-                    );
-                  })}
-                </View>
-              );
-            })
-          )}
-          <View style={tw`mt-3`}>
-            <TouchableOpacity
-              onPress={handleSaveParticipants}
-              disabled={empAvailLoading || datesInRange.length === 0}
-              activeOpacity={0.7}
-              style={tw.style('rounded p-3 items-center', (empAvailLoading || datesInRange.length === 0) ? 'bg-blue-300' : 'bg-blue-600')}
-            >
-              <Text style={tw`text-white font-bold`}>
-                {empAvailLoading ? '判定中…' : (datesInRange.length === 0 ? '期間を設定してください' : '参加従業員を保存')}
+            <>
+              <Text style={tw`text-xs text-gray-600 mb-2`}>
+                下のステータスをタップすると、日程・参加従業員・車両の詳細が表示されます（閲覧のみ）。
               </Text>
-            </TouchableOpacity>
-          </View>
+
+              {/* ステータス種別ごとのチェックボタン */}
+              <View style={tw`flex-row flex-wrap -mx-1 mb-2`}>
+                {WORK_STATUS_TYPES.map(st => {
+                  // そのタイプのworkStatusが1件も無ければボタンを出さない
+                  const exists = workStatuses.some(ws => ws.type === st.key);
+                  if (!exists) return null;
+                  const selected = expandedStatusType === st.key;
+                  return (
+                    <TouchableOpacity
+                      key={st.key}
+                      activeOpacity={0.7}
+                      onPress={() =>
+                        setExpandedStatusType(prev => prev === st.key ? null : st.key)
+                      }
+                      style={tw.style(
+                        'm-1 px-3 py-2 rounded border',
+                        selected
+                          ? 'bg-blue-100 border-blue-400'
+                          : 'bg-white border-gray-300'
+                      )}
+                    >
+                      <Text>{(selected ? '☑ ' : '☐ ') + st.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* 選択されているタイプのステータスを一覧表示（複数件あり得る） */}
+              {expandedStatusType && (
+                <View>
+                  {workStatuses
+                    .filter(ws => ws.type === expandedStatusType)
+                    .map(ws => {
+                      const start = ws.startDate;
+                      const end = ws.endDate;
+                      const statusJa =
+                        ws.scheduleStatus === 'fixed' ? '確定' : '未設定';
+                      const empNames = (ws.employeeIds || [])
+                        .map(id => nameById[id])
+                        .filter(Boolean);
+                      const vehicleNames = (ws.vehicleIds || [])
+                        .map(id => vehiclesById[id]?.name)
+                        .filter(Boolean);
+
+                      const formatDateTime = (d) => {
+                        if (!d) return '未設定';
+                        const y = d.getFullYear();
+                        const m = String(d.getMonth() + 1).padStart(2, '0');
+                        const dd = String(d.getDate()).padStart(2, '0');
+                        const hh = String(d.getHours()).padStart(2, '0');
+                        const mm = String(d.getMinutes()).padStart(2, '0');
+                        return `${y}-${m}-${dd} ${hh}:${mm}`;
+                      };
+
+                      return (
+                        <View
+                          key={ws.id}
+                          style={tw`mb-3 p-3 border rounded bg-gray-50`}
+                        >
+                          <View style={tw`flex-row items-center justify-between mb-2`}>
+                            <Text style={tw`font-bold`}>
+                              {ws.label || '工程'}
+                            </Text>
+                            <View
+                              style={tw`px-2 py-1 rounded-full border ${
+                                ws.scheduleStatus === 'fixed'
+                                  ? 'bg-green-100 border-green-400'
+                                  : 'bg-gray-100 border-gray-400'
+                              }`}
+                            >
+                              <Text style={tw`text-xs`}>{statusJa}</Text>
+                            </View>
+                          </View>
+
+                          <Text style={tw`mb-1`}>
+                            期間: {formatDateTime(start)} ～ {formatDateTime(end)}
+                          </Text>
+                          <Text style={tw`mb-1`}>
+                            参加従業員:
+                            {empNames.length ? ` ${empNames.join('、')}` : ' —'}
+                          </Text>
+                          <Text>
+                            車両:
+                            {vehicleNames.length ? ` ${vehicleNames.join('、')}` : ' —'}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                </View>
+              )}
+            </>
+          )}
         </View>
 
-        {/* ===== 車両 ===== */}
-        <View style={tw`mt-6`}>
-          <Text style={tw`text-lg font-bold`}>車両</Text>
-          {datesInRange.length === 0 ? (
-            <Text style={tw`mt-2`}>開始日・終了日の設定が必要です。</Text>
-          ) : (
-            datesInRange.map((d) => {
-              const ymd = toYmd(d);
-              const unavailable = unavailableMap[ymd] || new Set();
-              const sel = vehicleSelections[ymd] || {};
-              const salesList = vehicles.filter(v => (v?.vehicleType || 'sales') === 'sales');
-              const cargoList = vehicles.filter(v => (v?.vehicleType || 'sales') === 'cargo');
-              const RenderGroup = ({ title, type, list }) => (
-                <View style={tw`mb-3`}>
-                 <Text style={tw`mb-1`}>{title}{availLoading ? '（判定中…）' : ''}</Text>
-                  {list.length === 0 ? (
-                    <Text style={tw`text-gray-500`}>該当車両なし</Text>
-                  ) : (
-                    <View style={tw`flex-row flex-wrap -mx-1`}>
-                      {list.map(v => {
-                        const isBlocked = unavailable.has(v.id);
-                        const isSelected = sel[type] === v.id;
-                        return (
-                          <TouchableOpacity
-                            key={v.id}
-                            disabled={isBlocked || availLoading}
-                            onPress={() => onPickVehicle(ymd, type, isSelected ? undefined : v.id)}
-                            activeOpacity={0.7}
-                            style={tw.style(
-                              'm-1 px-3 py-2 rounded border',
-                              isBlocked
-                                ? 'bg-gray-200 border-gray-300 opacity-50'
-                                : (availLoading
-                                    ? 'bg-gray-100 border-gray-300 opacity-60'
-                                    : (isSelected
-                                    ? 'bg-blue-100 border-blue-400'
-                                    : 'bg-white border-gray-300'
-                                  ))
-                            )}
-                          >
-                            <Text>{isSelected ? '☑ ' : '☐ '}{v.name}</Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  )}
-                </View>
-              );
-              return (
-                <View key={ymd} style={tw`mt-3 p-3 border rounded`}>
-                  <Text style={tw`font-bold mb-2`}>{d.toLocaleDateString()}</Text>
-                  <RenderGroup title="営業車枠" type="sales" list={salesList} />
-                  <RenderGroup title="積載車枠" type="cargo" list={cargoList} />
-                </View>
-              );
-            })
-          )}
-          <View style={tw`mt-3`}>
-            <TouchableOpacity
-              onPress={handleSaveVehicles}
-              disabled={availLoading}
-              activeOpacity={0.7}
-              style={tw.style('rounded p-3 items-center', availLoading ? 'bg-blue-300' : 'bg-blue-600')}
-            >
-            <Text style={tw`text-white font-bold`}>
-              {availLoading ? '判定中…' : '車両を保存'}
-            </Text>
-          </TouchableOpacity>
-          </View>
-        </View>
+
 
         {/* ===== 写真セクション ===== */}
         <View style={tw`mt-6`}>
