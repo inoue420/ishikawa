@@ -146,7 +146,7 @@ export default function HomeScreen({ navigation, route }) {
 
       // ★ 可視性（public + 条件付き limited）を考慮した取得
        const list = await fetchProjectsOverlappingRangeVisible(selStart, selEnd, me);
-      if (mySeq !== reqSeqRef.current) return; // 古い応答は破棄
+       if (mySeq !== reqSeqRef.current) return; // 古い応答は破棄
 
       // 表示順：開始時刻昇順
       const sorted = (list || []).sort((a, b) => {
