@@ -412,20 +412,72 @@ export default function ProjectRegisterScreen({ route }) {
     })();
   }, []);
 
+  // ─────────────────────────────────────────────
+  // ★重要: 「入力すべき日付」を、プロジェクト(start/end)の連続日ではなく
+  //   workStatuses の日付集合（union）にする（飛び日OK）
+  //   ※ workStatuses が無い場合のみ startDate〜endDate にフォールバック
+  // ─────────────────────────────────────────────
+
   const datesInRange = useMemo(() => {
-    if (!startDate || !endDate) return [];
-    const s0 = dateOnly(startDate), e0 = dateOnly(endDate);
-    const arr = [];
-    for (let d = new Date(s0); d <= e0; d.setDate(d.getDate() + 1)) {
-      arr.push(new Date(d));
+    const keySet = new Set();
+    (workStatuses || []).forEach(ws => {
+      if (!ws?.startDate || !ws?.endDate) return;
+      eachDateKeyInclusive(ws.startDate, ws.endDate).forEach(k => keySet.add(k));
+    });
+
+    const keys = keySet.size
+      ? Array.from(keySet).sort() // YYYY-MM-DD なので文字列sortでOK
+      : (startDate && endDate ? eachDateKeyInclusive(startDate, endDate) : []);
+
+    return keys.map(k => new Date(`${k}T00:00:00`));
+  }, [workStatuses, startDate.getTime(), endDate.getTime()]);
+
+  // 当日の「自プロジェクトの時間窓」を返す（workStatuses優先 / 無ければ startDate,endDate の封筒）
+  const getMyDayWindow = useCallback((d) => {
+    const dy = toYmd(d);
+    const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+    const dayEnd   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+
+    // 1) workStatuses から当日の最小開始〜最大終了を作る（複数工程が同日にあってもOK）
+    let minS = null;
+    let maxE = null;
+    for (const ws of (workStatuses || [])) {
+      if (!ws?.startDate || !ws?.endDate) continue;
+      const wsS = ws.startDate;
+      const wsE = ws.endDate;
+      const wsStartDy = toYmd(wsS);
+      const wsEndDy   = toYmd(wsE);
+      if (dy < wsStartDy || dy > wsEndDy) continue;
+
+      const clampStart =
+        (wsS <= dayStart && wsE >= dayEnd) ? dayStart :
+        (wsStartDy === dy) ? wsS : dayStart;
+      const clampEnd =
+        (wsS <= dayStart && wsE >= dayEnd) ? dayEnd :
+        (wsEndDy === dy) ? wsE : dayEnd;
+
+      if (!minS || clampStart < minS) minS = clampStart;
+      if (!maxE || clampEnd > maxE)   maxE = clampEnd;
     }
-    return arr;
-  }, [startDate, endDate]);
+    if (minS && maxE) return [minS, maxE];
+
+    // 2) フォールバック：従来通り startDate/endDate の封筒
+    const sd = startDate, ed = endDate;
+    const clampStart =
+      (sd <= dayStart && ed >= dayEnd) ? dayStart :
+      (toYmd(sd) === dy) ? sd : dayStart;
+    const clampEnd =
+      (sd <= dayStart && ed >= dayEnd) ? dayEnd :
+      (toYmd(ed) === dy) ? ed : dayEnd;
+    return [clampStart, clampEnd];
+  }, [workStatuses, startDate, endDate]);
+
   // 期間の「参加者」空き状況（他案件割当との時間帯オーバーラップ）
   useEffect(() => {
     (async () => {
       if (datesInRange.length === 0) {
         setUnavailableEmpMap({});
+        // 範囲が無いときだけ全クリア
         setParticipantSelectionsByDay({});
         return;
       }
@@ -447,38 +499,58 @@ export default function ProjectRegisterScreen({ route }) {
       const map = {};
       datesInRange.forEach(d => { map[toYmd(d)] = new Set(); });
 
-      const dayWindow = (d) => {
-        const sd = startDate, ed = endDate;
-        const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0);
-        const dayEnd   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23,59,59,999);
+      const overlaps = (a1, a2, b1, b2) => a1 < b2 && b1 < a2;
+      // 相手プロジェクトの当日窓（workStatusesがあればそれ優先）
+      const getOtherDayWindow = (other, day) => {
+        const dy = toYmd(day);
+        const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0, 0, 0);
+        const dayEnd   = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 59, 59, 999);
+
+        let minS = null;
+        let maxE = null;
+        const arr = Array.isArray(other?.workStatuses) ? other.workStatuses : [];
+        for (const raw of arr) {
+          const wsS = toSafeDate(raw?.startDate);
+          const wsE = toSafeDate(raw?.endDate);
+          if (!wsS || !wsE) continue;
+          const wsStartDy = toYmd(wsS);
+          const wsEndDy   = toYmd(wsE);
+          if (dy < wsStartDy || dy > wsEndDy) continue;
+
+          const clampStart =
+            (wsS <= dayStart && wsE >= dayEnd) ? dayStart :
+            (wsStartDy === dy) ? wsS : dayStart;
+          const clampEnd =
+            (wsS <= dayStart && wsE >= dayEnd) ? dayEnd :
+            (wsEndDy === dy) ? wsE : dayEnd;
+
+          if (!minS || clampStart < minS) minS = clampStart;
+          if (!maxE || clampEnd > maxE)   maxE = clampEnd;
+        }
+        if (minS && maxE) return [minS, maxE];
+
+        const oS = toSafeDate(other?.startDate);
+        const oE = toSafeDate(other?.endDate) || oS;
+        if (!oS || !oE) return [dayStart, dayEnd];
+
         const clampStart =
-          (sd <= dayStart && ed >= dayEnd) ? dayStart :
-          (toYmd(sd) === toYmd(d)) ? sd : dayStart;
+          (oS <= dayStart && oE >= dayEnd) ? dayStart :
+          (toYmd(oS) === dy) ? oS : dayStart;
         const clampEnd =
-          (sd <= dayStart && ed >= dayEnd) ? dayEnd :
-          (toYmd(ed) === toYmd(d)) ? ed : dayEnd;
+          (oS <= dayStart && oE >= dayEnd) ? dayEnd :
+          (toYmd(oE) === dy) ? oE : dayEnd;
         return [clampStart, clampEnd];
       };
-      const overlaps = (a1, a2, b1, b2) => a1 < b2 && b1 < a2;
 
       for (const a of assignments) {
         if (editingProjectId && a.projectId === editingProjectId) continue;
         const other = projMap[a.projectId];
         if (!other) continue;
-        const oS = other.startDate?.toDate?.() ?? new Date(other.startDate);
-        const oE = other.endDate?.toDate?.() ?? new Date(other.endDate || other.startDate);
         const dy = a.dateKey || toYmd(a.date?.toDate?.() ?? new Date(a.date));
-        const d  = new Date(dy);
         if (!map[dy]) continue;
-        const [meS, meE] = dayWindow(d);
-        const oDayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0);
-        const oDayEnd   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23,59,59,999);
-        const oClampS =
-          (oS <= oDayStart && oE >= oDayEnd) ? oDayStart :
-          (toYmd(oS) === dy) ? oS : oDayStart;
-        const oClampE =
-          (oS <= oDayStart && oE >= oDayEnd) ? oDayEnd :
-          (toYmd(oE) === dy) ? oE : oDayEnd;
+        const day = new Date(`${dy}T00:00:00`);
+        const [meS, meE] = getMyDayWindow(day);
+        const [oClampS, oClampE] = getOtherDayWindow(other, day);
         if (overlaps(meS, meE, oClampS, oClampE)) {
           map[dy].add(a.employeeId);
         }
@@ -491,23 +563,37 @@ export default function ProjectRegisterScreen({ route }) {
         const next = {};
         for (const r of mine) {
           const dy = r.dateKey || toYmd(r.date?.toDate?.() ?? new Date(r.date));
+          if (!map[dy]) continue; // 現在の入力対象日に限定
           const set = new Set(next[dy] || []);
           set.add(r.employeeId);
           next[dy] = set;
         }
         setParticipantSelectionsByDay(next);
       } else {
-        setParticipantSelectionsByDay({});
+        // ★範囲が変わっても、既存の選択は「対象日のみ」残す（全クリアしない）
+        setParticipantSelectionsByDay((prev) => {
+          const next = {};
+          const allowed = new Set(Object.keys(map));
+          for (const [k, v] of Object.entries(prev || {})) {
+            if (allowed.has(k)) next[k] = v;
+          }
+          return next;
+        });
       }
       setEmpAvailLoading(false);
     })();
-  }, [startDate.getTime(), endDate.getTime(), editingProjectId]);
+  }, [datesInRange, editingProjectId, fetchProjectsOverlappingRange, getMyDayWindow]);
 
   // 期間の空き状況（既予約・車検/修理）を算出
   useEffect(() => {
     (async () => {
       setAvailLoading(true);
-      if (datesInRange.length === 0) { setUnavailableMap({}); setVehicleSelections({}); return; }
+      if (datesInRange.length === 0) {
+        setUnavailableMap({});
+        setVehicleSelections({});
+        setAvailLoading(false);
+        return;
+      }
       const s = datesInRange[0];
       const e = datesInRange[datesInRange.length - 1];
       const startTs = Timestamp.fromDate(new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0,0,0,0));
@@ -526,27 +612,55 @@ export default function ProjectRegisterScreen({ route }) {
 
       const map = {};
       datesInRange.forEach(d => { map[toYmd(d)] = new Set(); });
-      // この画面で入力中の「自プロジェクトのその日ごとの時間窓」を求める
-      const dayWindow = (d) => {
-        const sd = startDate, ed = endDate;
-        const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0,0,0,0);
-        const dayEnd   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23,59,59,999);
-        const clampStart =
-          (sd <= dayStart && ed >= dayEnd) ? dayStart :
-          (toYmd(sd) === toYmd(d)) ? sd : dayStart;
-        const clampEnd =
-          (sd <= dayStart && ed >= dayEnd) ? dayEnd :
-          (toYmd(ed) === toYmd(d)) ? ed : dayEnd;
-        return [clampStart, clampEnd];
-      };
       const overlaps = (a1, a2, b1, b2) => a1 < b2 && b1 < a2; // 端がピッタリは非重複扱い
 
+      const getOtherDayWindow = (other, day) => {
+        const dy = toYmd(day);
+        const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0, 0, 0);
+        const dayEnd   = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 59, 59, 999);
+
+        let minS = null;
+        let maxE = null;
+        const arr = Array.isArray(other?.workStatuses) ? other.workStatuses : [];
+        for (const raw of arr) {
+          const wsS = toSafeDate(raw?.startDate);
+          const wsE = toSafeDate(raw?.endDate);
+          if (!wsS || !wsE) continue;
+          const wsStartDy = toYmd(wsS);
+          const wsEndDy   = toYmd(wsE);
+          if (dy < wsStartDy || dy > wsEndDy) continue;
+
+          const clampStart =
+            (wsS <= dayStart && wsE >= dayEnd) ? dayStart :
+            (wsStartDy === dy) ? wsS : dayStart;
+          const clampEnd =
+            (wsS <= dayStart && wsE >= dayEnd) ? dayEnd :
+            (wsEndDy === dy) ? wsE : dayEnd;
+
+          if (!minS || clampStart < minS) minS = clampStart;
+          if (!maxE || clampEnd > maxE)   maxE = clampEnd;
+        }
+        if (minS && maxE) return [minS, maxE];
+
+        const oS = toSafeDate(other?.startDate);
+        const oE = toSafeDate(other?.endDate) || oS;
+        if (!oS || !oE) return [dayStart, dayEnd];
+
+        const clampStart =
+          (oS <= dayStart && oE >= dayEnd) ? dayStart :
+          (toYmd(oS) === dy) ? oS : dayStart;
+        const clampEnd =
+          (oS <= dayStart && oE >= dayEnd) ? dayEnd :
+          (toYmd(oE) === dy) ? oE : dayEnd;
+        return [clampStart, clampEnd];
+      };
+      
       // 使用不可：車検/修理ブロック
       for (const b of blocks) {
         const bs = b.startDate.toDate ? b.startDate.toDate() : new Date(b.startDate);
         const be = b.endDate.toDate ? b.endDate.toDate() : new Date(b.endDate);
         for (const d of datesInRange) {
-          const [meS, meE] = dayWindow(d);
+          const [meS, meE] = getMyDayWindow(d);
           if (overlaps(meS, meE, bs, be)) map[toYmd(d)].add(b.vehicleId);
         }
       }
@@ -555,20 +669,10 @@ export default function ProjectRegisterScreen({ route }) {
         if (editingProjectId && r.projectId === editingProjectId) continue; // 自案件は除外
         const other = projMap[r.projectId];
         if (!other) continue;
-        const oS = other.startDate?.toDate?.() ?? new Date(other.startDate);
-        const oE = (other.endDate?.toDate?.() ?? new Date(other.endDate || other.startDate));
         const d  = (r.date?.toDate?.() ?? new Date(r.date));
         const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-        const [meS, meE] = dayWindow(day);
-        // 相手プロジェクトのその日の時間窓
-        const oDayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0,0,0,0);
-        const oDayEnd   = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23,59,59,999);
-        const oClampS =
-          (oS <= oDayStart && oE >= oDayEnd) ? oDayStart :
-          (toYmd(oS) === toYmd(day)) ? oS : oDayStart;
-        const oClampE =
-          (oS <= oDayStart && oE >= oDayEnd) ? oDayEnd :
-          (toYmd(oE) === toYmd(day)) ? oE : oDayEnd;
+        const [meS, meE] = getMyDayWindow(day);
+        const [oClampS, oClampE] = getOtherDayWindow(other, day);
         if (overlaps(meS, meE, oClampS, oClampE)) {
           const dy = toYmd(day);
           if (!map[dy]) map[dy] = new Set();
@@ -583,16 +687,25 @@ export default function ProjectRegisterScreen({ route }) {
         const next = {};
         for (const r of mine) {
           const dy = toYmd(r.date.toDate ? r.date.toDate() : new Date(r.date));
+          if (!map[dy]) continue; // 現在の入力対象日に限定
           const v  = vehiclesById[r.vehicleId];
           const t  = (v?.vehicleType || 'sales'); // 既存データは営業車扱いにフォールバック
           next[dy] = { ...(next[dy] || {}), [t]: r.vehicleId };
         }
         setVehicleSelections(next);
       } else {
-        setVehicleSelections({});
+        // ★範囲が変わっても、既存の選択は「対象日のみ」残す（全クリアしない）
+        setVehicleSelections((prev) => {
+          const next = {};
+          const allowed = new Set(Object.keys(map));
+          for (const [k, v] of Object.entries(prev || {})) {
+            if (allowed.has(k)) next[k] = v;
+          }
+          return next;
+        });
       }
     })().finally(() => setAvailLoading(false));
- }, [startDate.getTime(), endDate.getTime(), editingProjectId, vehiclesById]);
+}, [datesInRange, editingProjectId, vehiclesById, getMyDayWindow]);
 
   const onPickVehicle = (ymd, type, vehicleId) => {
     const blocked = !!vehicleId && unavailableMap[ymd]?.has(vehicleId);
@@ -918,7 +1031,14 @@ useEffect(() => {
     ).length;
     const internalCount = participantObjs.length - externalCount;
 
-    const hours = calcWorkHours(startDate, endDate);
+    // ★飛び日対応：workStatuses がある場合は工程の合算時間を使う（封筒(start/end)による過大計上を避ける）
+    //   ※工程が重なる場合は合算で増える（必要なら後で「日単位union」に改善可能）
+    const hours = (() => {
+      const dated = (workStatuses || []).filter(ws => ws?.startDate && ws?.endDate);
+      if (dated.length === 0) return calcWorkHours(startDate, endDate);
+      return dated.reduce((sum, ws) => sum + calcWorkHours(ws.startDate, ws.endDate), 0);
+    })();
+
     const laborCost = Math.round(
       internalCount * EMPLOYEE_HOURLY * hours +
         externalCount * EXTERNAL_HOURLY * hours
@@ -1518,7 +1638,16 @@ useEffect(() => {
 
         {/* ステータスごとの詳細フォーム（ボタン押下で展開） */}
         {workStatuses.map((ws) => {
-          if (!ws.expanded) return null;
+
+          // ★このステータスがカバーする日付だけを表示する（飛び日を強制しない）
+          const statusDates = (() => {
+            if (!ws.startDate || !ws.endDate) return [];
+            const s0 = dateOnly(ws.startDate), e0 = dateOnly(ws.endDate);
+            const arr = [];
+            for (let d = new Date(s0); d <= e0; d.setDate(d.getDate() + 1)) arr.push(new Date(d));
+            return arr;
+          })();
+
           return (
             <View
               key={ws.id}
@@ -1675,11 +1804,11 @@ useEffect(() => {
                 </Text>
               </View>
 
-              {datesInRange.length === 0 && (
-                <Text>日付範囲を設定してください。</Text>
+              {statusDates.length === 0 && (
+                <Text>このステータスの開始・終了を設定してください。</Text>
               )}
 
-              {datesInRange.map((d) => {
+              {statusDates.map((d) => {
                 const y = toYmd(d);
                 const blocked = unavailableEmpMap[y] || new Set();
                 const cur = participantSelectionsByDay[y] || new Set();
@@ -1765,11 +1894,11 @@ useEffect(() => {
 
               {/* ステータスごとの車両選択（開始〜終了の各日：営業車／積載車） */}
               <Text style={tw`mt-2 mb-1`}>車両選択</Text>
-              {datesInRange.length === 0 && (
-                <Text>日付範囲を設定してください。</Text>
+              {statusDates.length === 0 && (
+                <Text>このステータスの開始・終了を設定してください。</Text>
               )}
 
-              {datesInRange.map((d) => {
+              {statusDates.map((d) => {
                 const ymd = toYmd(d);
                 const unavailable = unavailableMap[ymd] || new Set();
                 const sel = vehicleSelections[ymd] || {};

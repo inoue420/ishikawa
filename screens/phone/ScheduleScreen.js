@@ -133,6 +133,74 @@ const dateKey = (d) => {
   return `${y}-${m}-${day}`;
 }; 
 
+// YYYY-MM-DD -> Date(00:00)
+const ymdToDate = (ymd) => {
+  const [y, m, d] = String(ymd || '').split('-').map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d);
+};
+
+const dateOnly = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+// Date2つから、その範囲の YYYY-MM-DD をSetに追加
+const addDateKeysInclusive = (set, sDate, eDate) => {
+  if (!sDate || !eDate) return;
+  const s = dateOnly(sDate);
+  const e = dateOnly(eDate);
+  for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
+    set.add(toDateString(d));
+  }
+};
+
+// ★ project の “稼働日(YYYY-MM-DD)” を解決：
+//  - workStatuses[].dateKeys があればそれを最優先
+//  - 無ければ workStatuses の start/end から生成
+//  - workStatuses が無ければ従来の project start/end
+function collectActiveDateKeys(p) {
+  const set = new Set();
+  const wss = Array.isArray(p?.workStatuses) ? p.workStatuses : [];
+  wss.forEach((ws) => {
+    if (Array.isArray(ws?.dateKeys) && ws.dateKeys.length) {
+      ws.dateKeys.forEach((k) => set.add(String(k)));
+      return;
+    }
+    if (ws?.startDate && ws?.endDate) {
+      const s = fromTimestampOrString(ws.startDate);
+      const e = fromTimestampOrString(ws.endDate);
+      addDateKeysInclusive(set, s, e);
+    }
+  });
+  if (set.size) return Array.from(set).sort((a, b) => a.localeCompare(b));
+
+  // fallback: project start/end
+  const s0 = fromTimestampOrString(p.startDate);
+  const e0 = fromTimestampOrString(p.endDate || p.startDate);
+  addDateKeysInclusive(set, s0, e0);
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
+
+// 稼働日キー列を “連続区間” に分割
+function buildSegmentsFromKeys(keys) {
+  if (!keys || keys.length === 0) return [];
+  const out = [];
+  let segStart = keys[0];
+  let prev = keys[0];
+  for (let i = 1; i < keys.length; i++) {
+    const cur = keys[i];
+    const pd = ymdToDate(prev);
+    const cd = ymdToDate(cur);
+    if (pd && cd && (cd - pd) === DAY_MS) {
+      prev = cur;
+      continue;
+    }
+    out.push({ start: segStart, end: prev });
+    segStart = cur;
+    prev = cur;
+  }
+  out.push({ start: segStart, end: prev });
+  return out;
+}
+
 export default function ScheduleScreen({ navigation, route }) {
   // 可能な限り上位のナビゲータから userEmail を拾う
   const findUserEmailFromNav = useCallback(() => {
@@ -400,14 +468,10 @@ export default function ScheduleScreen({ navigation, route }) {
 
     // 1) 予定を日単位のセグメントへ展開し、各日に登録
     projects.forEach((p) => {
-      const s0 = fromTimestampOrString(p.startDate);
-      const e0 = fromTimestampOrString(p.endDate || p.startDate);
-      // 日単位に切り捨て
-      const s = new Date(s0.getFullYear(), s0.getMonth(), s0.getDate());
-      const e = new Date(e0.getFullYear(), e0.getMonth(), e0.getDate());
+      // ★ 稼働日（workStatuses.dateKeysベース）→ 連続区間に分割
+      const activeKeys = collectActiveDateKeys(p);
+      const segments = buildSegmentsFromKeys(activeKeys);
 
-      const isMulti = (e - s) >= DAY_MS;              // 複数日判定
-      const startMs = s0.getTime();                   // 並べ替えキー（開始日時）
       const projectKey = String(getProjectId(p) ?? p.title ?? '');
       const rawTitle = String(p.title ?? p.name ?? p.id ?? '（無題）');
       const { loc, plain } = parseNameForLocation(rawTitle);
@@ -416,21 +480,27 @@ export default function ScheduleScreen({ navigation, route }) {
       const title = locFinal ? `【${prefix}${locFinal}】${plain}` : rawTitle;
       const color = colorFromId(projectKey);
 
-      // 週固定はやめ、セグメント全期間をその日ごとに登録
-      const segLen = Math.round((e - s) / DAY_MS) + 1;
-      const midIdx = Math.floor((segLen - 1) / 2);
-      let d = new Date(s);
-      let idx = 0;
-      while (d <= e) {
-        const k = toDateString(d);
-        pushByDay(k, {
-          projectKey, title, color,
-          segStart: s, segEnd: e, segLen, midIdx,
-          isMulti, startMs, dayIdx: idx,
-        });
-        d.setDate(d.getDate() + 1);
-        idx += 1;
-      }
+      segments.forEach((seg) => {
+        const s = ymdToDate(seg.start);
+        const e = ymdToDate(seg.end);
+        if (!s || !e) return;
+        const isMulti = (e - s) >= DAY_MS;
+        const startMs = s.getTime(); // 区間開始で並べ替え
+        const segLen = Math.round((e - s) / DAY_MS) + 1;
+        const midIdx = Math.floor((segLen - 1) / 2);
+        let d = new Date(s);
+        let idx = 0;
+        while (d <= e) {
+          const k = toDateString(d);
+          pushByDay(k, {
+            projectKey, title, color,
+            segStart: s, segEnd: e, segLen, midIdx,
+            isMulti, startMs, dayIdx: idx,
+          });
+          d.setDate(d.getDate() + 1);
+          idx += 1;
+        }
+      });
     });
 
     // 2) 各日で優先度ソート → 上から lane に詰める
@@ -475,14 +545,13 @@ export default function ScheduleScreen({ navigation, route }) {
   // プロジェクトの表示日に使う日付を決める：
   // Contextの date がその案件期間内ならそれ、外れていれば startDate を使う
   const chooseDateForProject = useCallback((p, ctxDate) => {
-    const s0 = fromTimestampOrString(p.startDate);
-    const e0 = fromTimestampOrString(p.endDate || p.startDate);
-    const start = new Date(s0.getFullYear(), s0.getMonth(), s0.getDate());
-    const end   = new Date(e0.getFullYear(), e0.getMonth(), e0.getDate());
+    const activeKeys = collectActiveDateKeys(p);
     const base  = ctxDate instanceof Date ? new Date(ctxDate) : new Date();
     const d     = new Date(base.getFullYear(), base.getMonth(), base.getDate());
-    if (d < start || d > end) return start;
-    return d;
+    const dk    = toDateString(d);
+    if (activeKeys.includes(dk)) return d;
+    const first = ymdToDate(activeKeys[0]);
+    return first || d;
   }, []);
   
 
