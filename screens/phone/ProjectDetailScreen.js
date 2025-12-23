@@ -46,6 +46,17 @@ const toDateMaybe = (v) => {
   }
 };
 
+// 日付ヘルパー（YYYY-MM-DD をローカル日付として安全に解釈）
+const parseYmdToDate = (ymd) => {
+  const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  const dt = new Date(y, mo, d);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+};
+const dateOnly = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 // ── プロジェクトステータス（Register画面と同じ定義） ──
 const STATUS_OPTIONS = [
   { value: 'prospect',    label: '見込み' },
@@ -128,6 +139,10 @@ export default function ProjectDetailScreen({ route }) {
   const [workStatuses, setWorkStatuses] = useState([]); // FirestoreのworkStatusesをそのまま保持
   const [expandedStatusType, setExpandedStatusType] = useState(null); // 表示するタイプ（assembly等）
 
+  // date が変わったら初期選択を作り直す（別日へ遷移した時に反映）
+  useEffect(() => {
+    setExpandedStatusType(null);
+  }, [date]);
 
   // id→name の辞書と、参加者名リスト
   const nameById = useMemo(
@@ -225,7 +240,36 @@ export default function ProjectDetailScreen({ route }) {
       endDate: toDateMaybe(ws.endDate),
     }));
     setWorkStatuses(ws);
-  }, [project?.workStatuses]);  
+
+    // ★ 初期チェック：その日(date)に割り当てられている工程を最初から選択
+    // 既にユーザーが選択している場合は上書きしない
+    if (expandedStatusType) return;
+    const target = parseYmdToDate(date);
+    if (!target) return;
+    const t = dateOnly(target).getTime();
+
+    const candidates = ws
+      .filter(x => x?.type)
+      .filter(x => x?.startDate && x?.endDate)
+      .filter(x => {
+        const s = dateOnly(x.startDate).getTime();
+　       const e = dateOnly(x.endDate).getTime();
+        return s <= t && t <= e;
+      })
+      .sort((a, b) => {
+        const af = a.scheduleStatus === 'fixed' ? 0 : 1;
+        const bf = b.scheduleStatus === 'fixed' ? 0 : 1;
+        if (af !== bf) return af - bf;
+        const as = a.startDate ? a.startDate.getTime() : 0;
+        const bs = b.startDate ? b.startDate.getTime() : 0;
+        if (as !== bs) return as - bs;
+        return String(a.type).localeCompare(String(b.type));
+      });
+
+    if (candidates.length) {
+      setExpandedStatusType(candidates[0].type);
+    }
+  }, [project?.workStatuses, date, expandedStatusType]);
 
   // 車両マスタ
   useEffect(() => {

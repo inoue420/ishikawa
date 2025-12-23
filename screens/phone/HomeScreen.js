@@ -61,6 +61,43 @@ export default function HomeScreen({ navigation, route }) {
     const ch = name.trim().charAt(0);
     return /[A-Za-z]/.test(ch) ? ch.toUpperCase() : ch; // 日本語はそのまま先頭文字
   };
+  // ── 作業ステータス（工程）頭文字（選択日分） ──
+  // ProjectRegisterScreen の WORK_STATUS_TYPES に合わせる（不足は表示しない）
+  const WORK_STATUS_LABEL_MAP = {
+    assembly: '組立',
+    dismantle: '解体',
+    additional: '追加工事',
+    regular: '常用',
+    correction: '是正',
+    pickup: '引き上げ',
+  };
+
+  const dateOnly = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+  const workStatusInitialForSelectedDate = (proj) => {
+    const list = Array.isArray(proj?.workStatuses) ? proj.workStatuses : [];
+    if (!list.length) return '';
+    const target = dateOnly(selectedDate).getTime();
+
+    const matches = list
+      .map((ws) => {
+        const s = asDate(ws?.startDate);
+        const e = asDate(ws?.endDate);
+        return { ...ws, _s: s, _e: e };
+      })
+      .filter((ws) => ws._s && ws._e)
+      .filter((ws) => {
+        const s = dateOnly(ws._s).getTime();
+        const e = dateOnly(ws._e).getTime();
+        return s <= target && target <= e;
+      })
+      .sort((a, b) => a._s - b._s);
+
+    if (!matches.length) return '';
+    const ws = matches[0];
+    const label = String(ws?.label || WORK_STATUS_LABEL_MAP[ws?.type] || '').trim();
+    return label ? label.charAt(0) : '';
+  };
 
   // ★ name から【場所】を抽出
   const parseNameForLocation = (fullName) => {
@@ -75,7 +112,9 @@ export default function HomeScreen({ navigation, route }) {
     const locFinal = proj.location || loc || '';
     if (!locFinal) return raw; // 念のため
     const prefix = proj?.visibility === 'limited' ? '限定公開　' : '';
-    return `【${prefix}${locFinal}】${plain}`;
+    const workInitial = workStatusInitialForSelectedDate(proj);
+    const locLabel = workInitial ? `${workInitial}　${locFinal}` : locFinal;
+    return `【${prefix}${locLabel}】${plain}`;
   };
 
   const onDateChange = (_, d) => {

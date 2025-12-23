@@ -116,7 +116,7 @@ const parseNameForLocation = (fullName) => {
 };
 
 // ===== 表示調整（必要に応じて調整OK） =====
- const MAX_LANES    = 4;   // 1日あたり最大4行
+ const MAX_LANES    = 2;   // ★ 3件以上は2件まで表示し、残りは +〇 表示
  const CELL_HEIGHT  = 90; // セルの高さ（最終週も入るよう少し余裕）
  const BAR_HEIGHT   = 18;  // バーの高さ
  const HEADER_SPACE = 72;  // 見出し(曜日名＋月名)ぶんの概算高さ
@@ -643,7 +643,9 @@ export default function ScheduleScreen({ navigation, route }) {
 
           {/* 超過表示 */}
           {info.overflow > 0 && (
-            <Text style={tw`text-[10px] text-gray-500 mt-0.5`}>他{info.overflow}件</Text>
+            <Text style={tw`text-[11px] text-gray-600 mt-0.5 font-semibold`}>
+              {`+${info.overflow}`}
+            </Text>
           )}
         </View>
       </TouchableOpacity>
