@@ -290,21 +290,16 @@ export default function ProjectRegisterScreen({ route }) {
 
  // ★追加: 作業ステータスの開始・終了からプロジェクト全体の開始・終了を自動反映
  useEffect(() => {
-   if (!workStatuses || workStatuses.length === 0) return;
-
-   let minStart = null;
-   let maxEnd = null;
-
-   for (const ws of workStatuses) {
-     if (!ws.startDate || !ws.endDate) continue;
-     if (!minStart || ws.startDate < minStart) minStart = ws.startDate;
-     if (!maxEnd || ws.endDate > maxEnd) maxEnd = ws.endDate;
+   const dated = (workStatuses || []).filter(ws => ws?.startDate && ws?.endDate);
+   if (dated.length === 0) return;
+   let minStart = dated[0].startDate;
+   let maxEnd = dated[0].endDate;
+   for (const ws of dated) {
+     if (ws.startDate < minStart) minStart = ws.startDate;
+     if (ws.endDate > maxEnd) maxEnd = ws.endDate;
    }
-
-   if (minStart && maxEnd) {
-     setStartDate(minStart);
-     setEndDate(maxEnd);
-   }
+   setStartDate(prev => (prev?.getTime?.() === minStart.getTime() ? prev : minStart));
+   setEndDate(prev => (prev?.getTime?.() === maxEnd.getTime() ? prev : maxEnd));
  }, [workStatuses]);
   
   // 作業ステータス用の Date/Time ピッカー
@@ -475,6 +470,7 @@ export default function ProjectRegisterScreen({ route }) {
   // 期間の「参加者」空き状況（他案件割当との時間帯オーバーラップ）
   useEffect(() => {
     (async () => {
+      try {
       if (datesInRange.length === 0) {
         setUnavailableEmpMap({});
         // 範囲が無いときだけ全クリア
@@ -581,6 +577,11 @@ export default function ProjectRegisterScreen({ route }) {
         });
       }
       setEmpAvailLoading(false);
+      } catch (e) {
+        console.log('[emp availability] error', e);
+      } finally {
+        setEmpAvailLoading(false);
+      }
     })();
   }, [datesInRange, editingProjectId, fetchProjectsOverlappingRange, getMyDayWindow]);
 

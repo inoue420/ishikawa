@@ -69,6 +69,48 @@ const parseYmdToDate = (ymd) => {
   const dt = new Date(y, mo, d);
   return Number.isNaN(dt.getTime()) ? null : dt;
 };
+
+const pad2 = (n) => String(n).padStart(2, '0');
+const fmtHHmm = (d) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+const sameYmd = (a, b) =>
+  a && b &&
+  a.getFullYear() === b.getFullYear() &&
+  a.getMonth() === b.getMonth() &&
+  a.getDate() === b.getDate();
+
+const getRangeForDate = (project, ymd) => {
+  const day = parseYmdToDate(ymd);
+  if (!day) return null;
+
+  const list = Array.isArray(project?.workStatuses) ? project.workStatuses : [];
+  const hit = [];
+
+  for (const ws of list) {
+    const s = toDateMaybe(ws?.startDate);
+    const e = toDateMaybe(ws?.endDate);
+    if (!s || !e) continue;
+
+    // day が [s..e] に含まれるか（dateOnly比較）
+    const ds = dateOnly(s);
+    const de = dateOnly(e);
+    const dd = dateOnly(day);
+    if (dd < ds || dd > de) continue;
+
+    // その日表示用の開始/終了（中日なら 00:00-23:59 扱い）
+    const startForDay = sameYmd(dd, ds) ? s : new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0, 0, 0);
+    const endForDay   = sameYmd(dd, de) ? e : new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 59, 0, 0);
+
+    hit.push({ start: startForDay, end: endForDay });
+  }
+
+  if (hit.length === 0) return null;
+
+  const minStart = hit.reduce((a, b) => (a.start < b.start ? a : b)).start;
+  const maxEnd   = hit.reduce((a, b) => (a.end > b.end ? a : b)).end;
+
+  return { start: minStart, end: maxEnd };
+};
+
 const dateOnly = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 // ── プロジェクトステータス（Register画面と同じ定義） ──
 const STATUS_OPTIONS = [
@@ -552,10 +594,10 @@ export default function ProjectDetailScreen({ route }) {
           <Text style={tw`text-xs text-gray-500 mt-1`}>プロジェクト詳細</Text>
         </View>
 
-        <Text>営業担当: {employees.find(e => e.id === project?.sales)?.name || '—'}</Text>
-        <Text>現場調査担当: {employees.find(e => e.id === project?.survey)?.name || '—'}</Text>
-        <Text>設計担当: {employees.find(e => e.id === project?.design)?.name || '—'}</Text>
-        <Text>管理担当: {employees.find(e => e.id === project?.management)?.name || '—'}</Text>
+        <Text>営業担当: {employees.find(e => e.id === project?.sales)?.name || project?.salesOtherName || '—'}</Text>
+        <Text>現場調査担当: {employees.find(e => e.id === project?.survey)?.name || project?.surveyOtherName || '—'}</Text>
+        <Text>設計担当: {employees.find(e => e.id === project?.design)?.name || project?.designOtherName || '—'}</Text>
+        <Text>管理担当: {employees.find(e => e.id === project?.management)?.name || project?.managementOtherName || '—'}</Text>
         <Text>
           参加従業員（{participantNames.length}名）:
           {participantNames.length ? ` ${participantNames.join('、')}` : ' —'}
