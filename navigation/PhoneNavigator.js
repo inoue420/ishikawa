@@ -103,6 +103,12 @@ export default function PhoneNavigator({ userEmail }) {
           component={ProfileStackScreen}
           options={{ title: 'プロフィール' }}
           initialParams={{ userEmail }} // ★ 追加
+          listeners={({ navigation }) => ({
+            tabPress: () => {
+              // ★Profileタブを押したら、スタックの中にいても必ず先頭(ProfileMain)へ戻す
+              navigation.navigate('Profile', { screen: 'ProfileMain' });
+            },
+          })}          
         />
       )}
 

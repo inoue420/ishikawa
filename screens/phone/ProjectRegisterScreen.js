@@ -877,6 +877,12 @@ export default function ProjectRegisterScreen({ route }) {
 useEffect(() => {
   const params = route?.params ?? {};
 
+  // ★重要：copy/new で入った時に以前の編集IDが残っていると「上書き編集」になってしまう
+  // mode が edit 以外なら編集状態を必ず解除する
+  if (params.mode !== 'edit') {
+    setEditingProjectId(null);
+  }
+
   // 1) コピー → 左フォームへ反映
   if (params.mode === 'copy' && params.initialValues) {
     prefillLeftForm(params.initialValues, { appendCopySuffix: true });
@@ -894,7 +900,7 @@ useEffect(() => {
         if (proj) prefillLeftForm(proj);
       }
     }
-}, [route?.params, projects, prefillLeftForm]);
+}, [route?.params, projects, prefillLeftForm, setEditingProjectId]);
 
 
 
@@ -1637,7 +1643,7 @@ useEffect(() => {
         </View>
 
         {/* ステータスごとの詳細フォーム（ボタン押下で展開） */}
-        {workStatuses.map((ws) => {
+        {workStatuses.filter((ws) => ws.expanded).map((ws) => {
 
           // ★このステータスがカバーする日付だけを表示する（飛び日を強制しない）
           const statusDates = (() => {
