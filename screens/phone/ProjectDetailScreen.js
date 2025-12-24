@@ -33,22 +33,19 @@ import {
   deleteProject,  
   fetchVehicles,
 } from '../../firestoreService';
-// Timestamp はもう不要なので削除
-
 
 // 追加：Firestore Timestamp/Date を安全に Date|null へ
 const toDateMaybe = (v) => {
   if (!v) return null;
   try {
     if (v?.toDate) return v.toDate();
-    // 'YYYY-MM-DD' は UTC 解釈されるため、ローカル日付としてパースする
     if (typeof v === 'string') {
       const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
       if (m) {
         const y = Number(m[1]);
         const mo = Number(m[2]) - 1;
         const d0 = Number(m[3]);
-        const dt = new Date(y, mo, d0);
+        const dt = new Date(y, mo, d0, 0, 0, 0, 0);
         return Number.isNaN(dt.getTime()) ? null : dt;
       }
     }
@@ -59,57 +56,7 @@ const toDateMaybe = (v) => {
   }
 };
 
-// 日付ヘルパー（YYYY-MM-DD をローカル日付として安全に解釈）
-const parseYmdToDate = (ymd) => {
-  const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return null;
-  const y = Number(m[1]);
-  const mo = Number(m[2]) - 1;
-  const d = Number(m[3]);
-  const dt = new Date(y, mo, d);
-  return Number.isNaN(dt.getTime()) ? null : dt;
-};
 
-const pad2 = (n) => String(n).padStart(2, '0');
-const fmtHHmm = (d) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-const sameYmd = (a, b) =>
-  a && b &&
-  a.getFullYear() === b.getFullYear() &&
-  a.getMonth() === b.getMonth() &&
-  a.getDate() === b.getDate();
-
-const getRangeForDate = (project, ymd) => {
-  const day = parseYmdToDate(ymd);
-  if (!day) return null;
-
-  const list = Array.isArray(project?.workStatuses) ? project.workStatuses : [];
-  const hit = [];
-
-  for (const ws of list) {
-    const s = toDateMaybe(ws?.startDate);
-    const e = toDateMaybe(ws?.endDate);
-    if (!s || !e) continue;
-
-    // day が [s..e] に含まれるか（dateOnly比較）
-    const ds = dateOnly(s);
-    const de = dateOnly(e);
-    const dd = dateOnly(day);
-    if (dd < ds || dd > de) continue;
-
-    // その日表示用の開始/終了（中日なら 00:00-23:59 扱い）
-    const startForDay = sameYmd(dd, ds) ? s : new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0, 0, 0);
-    const endForDay   = sameYmd(dd, de) ? e : new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 59, 0, 0);
-
-    hit.push({ start: startForDay, end: endForDay });
-  }
-
-  if (hit.length === 0) return null;
-
-  const minStart = hit.reduce((a, b) => (a.start < b.start ? a : b)).start;
-  const maxEnd   = hit.reduce((a, b) => (a.end > b.end ? a : b)).end;
-
-  return { start: minStart, end: maxEnd };
-};
 
 const dateOnly = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 // ── プロジェクトステータス（Register画面と同じ定義） ──
@@ -143,7 +90,10 @@ export default function ProjectDetailScreen({ route }) {
   const [picking, setPicking] = useState(false);
 
   // 送信者を決定するヘルパー（by=従業員ID / byName=employees.name）
-  const resolveCurrentUser = async () => {
+      const [employees, setEmployees] = useState([]);
+      const [me, setMe] = useState(null); // { id, name, ... }
+
+      const resolveCurrentUser = useCallback(async () => {
     try {
       // 1) state から
       if (me?.id) return { by: me.id, byName: me.name ?? null, source: 'state' };
@@ -169,10 +119,9 @@ export default function ProjectDetailScreen({ route }) {
     }
     console.warn('[resolveCurrentUser] fallback to unknown');
     return { by: 'unknown', byName: null, source: 'unknown' };
-  };
+  }, [me?.id, me?.name, userEmail, employees]);
   const [loading, setLoading] = useState(true);
   const [project, setProject] = useState(null);
-  const [employees, setEmployees] = useState([]);
   const [usages, setUsages] = useState([]);
   const [materialsList, setMaterialsList] = useState([]);
 
@@ -180,7 +129,6 @@ export default function ProjectDetailScreen({ route }) {
   const [photos, setPhotos] = useState([]);
   const [editLogs, setEditLogs] = useState([]);
   const [comments, setComments] = useState([]);
-  const [me, setMe] = useState(null); // { id, name, ... }
   const [commentText, setCommentText] = useState('');
   const [pendingImage, setPendingImage] = useState(null); // { uri }
   const [sending, setSending] = useState(false);
@@ -295,11 +243,10 @@ export default function ProjectDetailScreen({ route }) {
       endDate: toDateMaybe(ws.endDate),
     }));
     setWorkStatuses(ws);
-
     // ★ 初期チェック：その日(date)に割り当てられている工程を最初から選択
     // 既にユーザーが選択している場合は上書きしない
     if (expandedStatusType) return;
-    const target = parseYmdToDate(date);
+    const target = toDateMaybe(date);
     if (!target) return;
     const t = dateOnly(target).getTime();
 
@@ -320,7 +267,7 @@ export default function ProjectDetailScreen({ route }) {
         if (as !== bs) return as - bs;
         return String(a.type).localeCompare(String(b.type));
       });
-
+     
     if (candidates.length) {
       setExpandedStatusType(candidates[0].type);
     }
@@ -342,45 +289,44 @@ export default function ProjectDetailScreen({ route }) {
 
   // 画像を選ぶ（送信時にまとめて投稿）
   const handlePickImage = async () => {
-  if (picking) return;
-  setPicking(true);
-  try {
-    // 1) 既存権限チェック
-    const cur = await ImagePicker.getMediaLibraryPermissionsAsync();
-    if (!cur.granted) {
-      const req = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!req.granted) {
-        Alert.alert('権限が必要です', '写真へのアクセスを許可してください。');
-        return;
+    if (picking) return;
+    setPicking(true);
+    try {
+      // 1) 既存権限チェック
+      const cur = await ImagePicker.getMediaLibraryPermissionsAsync();
+      if (!cur.granted) {
+        const req = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!req.granted) {
+          Alert.alert('権限が必要です', '写真へのアクセスを許可してください。');
+          return;
+        }
       }
+      // 2) ピッカー起動（堅めのオプション）
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 0.8,
+        exif: false,
+        base64: false,
+        allowsMultipleSelection: false,
+      });
+      if (result?.canceled) return;
+      const asset = result?.assets?.[0];
+      if (!asset?.uri) return;
+      setPendingImage({ uri: asset.uri });
+    } catch (e) {
+      console.error('[picker] error', e);
+      Alert.alert('画像の取得でエラーが発生しました。', String(e?.message ?? e));
+    } finally {
+      setPicking(false);
     }
-    // 2) ピッカー起動（堅めのオプション）
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-      quality: 0.8,
-      exif: false,
-      base64: false,
-      allowsMultipleSelection: false,
-      // selectionLimit: 1, // SDK により未対応ならコメントアウトでOK
-    });
-    if (result?.canceled) return;
-    const asset = result?.assets?.[0];
-    if (!asset?.uri) return;
-    setPendingImage({ uri: asset.uri });
-  } catch (e) {
-    console.error('[picker] error', e);
-    Alert.alert('画像の取得でエラーが発生しました。', String(e?.message ?? e));
-  }
-    finally {
-    setPicking(false);
-  }
   };
 
   // 送信（テキストだけ／画像だけ／両方OK）
   const handleSend = async () => {
     if (sending) return;
-    if (!commentText && !pendingImage) return;
+    const text = (commentText || '').trim();
+    if (!text && !pendingImage) return;
     setSending(true);
     try {
       const { by, byName, source } = await resolveCurrentUser();
@@ -402,7 +348,7 @@ export default function ProjectDetailScreen({ route }) {
       await addProjectComment({
         projectId,
         date,
-        text: commentText,
+        text,
         imageUrl: uploadedUrl,
         by,
         byName
@@ -494,7 +440,7 @@ export default function ProjectDetailScreen({ route }) {
       ],
       { cancelable: true },
     );
-  }, [navigation, project, userEmail, resolveCurrentUser]);
+  }, [navigation, project, projectId, date, userEmail, resolveCurrentUser]);
 
   // 追加：ヘッダー右上にメニュー（⋯）を設置
   useLayoutEffect(() => {

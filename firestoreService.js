@@ -23,6 +23,15 @@ import { getAuth } from 'firebase/auth';
 import * as FileSystem from 'expo-file-system';
 import { getApp } from 'firebase/app';
 
+ 
+// ─────────────────────────────────────────────
+// DEVログ（本番では出さない）
+// ─────────────────────────────────────────────
+const DLOG = (...args) => {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) console.log(...args);
+};
+
+
 // ─────────────────────────────────────────────
 // 役割判定（統一ロジック）
 //   executive / manager / office（department==='office'）を特権ユーザー扱い
@@ -31,6 +40,19 @@ export function isPrivUser(me) {
   if (!me) return false;
   const dept = String(me.department ?? '').toLowerCase();
   return me.role === 'executive' || me.role === 'manager' || dept === 'office';
+}
+
+// 'YYYY-MM-DD' をローカル日付として Date を作る（UTC解釈を回避）
+function ymdToDateLocal(ymdStr, endOfDay = false) {
+  const m = String(ymdStr || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  const dt = endOfDay
+    ? new Date(y, mo, d, 23, 59, 59, 999)
+    : new Date(y, mo, d, 0, 0, 0, 0);
+  return Number.isNaN(dt.getTime()) ? null : dt;
 }
 
 // Base64 -> Uint8Array（atob/Buffer 非依存で動く純JSデコーダ）
@@ -66,23 +88,23 @@ const employeesCol       = collection(db, "employees");
 
 // 画像URI→Blob（安全版：fetch 失敗時は FileSystem Base64 にフォールバック）
 async function uriToBlob(uri, mimeHint = 'image/jpeg') {
-  console.log('[uriToBlob] start', { uri: String(uri).slice(0, 60), mimeHint });
+  DLOG('[uriToBlob] start', { uri: String(uri).slice(0, 60), mimeHint });
   if (!uri) throw new Error('uriToBlob: uri is empty');
   try {
     const res = await fetch(uri);
     const b = await res.blob();
     // 一部端末で type が空になるため保険で差し替え
     const out = b.type ? b : b.slice(0, b.size, mimeHint);
-    console.log('[uriToBlob] via fetch', { size: out.size, type: out.type });
+    DLOG('[uriToBlob] via fetch', { size: out.size, type: out.type });
     return out;
   } catch (e) {
     // Android の content:// 等で fetch が失敗するケースに対応
-    console.log('[uriToBlob] fetch failed; fallback to FileSystem:', e?.message || e);
+    DLOG('[uriToBlob] fetch failed; fallback to FileSystem:', e?.message || e);
     const b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
     // atob / Buffer に依存しない純JS変換
     const u8 = base64ToUint8Array(b64);
     const out = new Blob([u8], { type: mimeHint });
-    console.log('[uriToBlob] via FileSystem', { size: out.size, type: out.type });
+    DLOG('[uriToBlob] via FileSystem', { size: out.size, type: out.type });
     return out;
   }
 }
@@ -178,7 +200,7 @@ export async function addUser(userData) {
 // ===== 写真アップロード/一覧/削除/履歴 =====
 
 export async function uploadProjectPhoto({ projectId, date, localUri, uploadedBy }) {
-  console.log('[uploadProjectPhoto] start', { projectId, date, localUri, uploadedBy });
+  DLOG('[uploadProjectPhoto] start', { projectId, date, localUri, uploadedBy });
   // 必須チェック（パスに undefined が混入すると storage/unknown になりやすい）
   if (!projectId) throw new Error('uploadProjectPhoto: projectId is required');
   if (!date)      throw new Error('uploadProjectPhoto: date is required');
@@ -192,11 +214,11 @@ export async function uploadProjectPhoto({ projectId, date, localUri, uploadedBy
     ext === 'png'  ? 'image/png'  :
     ext === 'heic' || ext === 'heif' ? 'image/heic' :
     'image/jpeg';
-    console.log('[uploadProjectPhoto] detect', { cleanUri, extRaw, ext, contentType });
+    DLOG('[uploadProjectPhoto] detect', { cleanUri, extRaw, ext, contentType });
 
   // Blob 化（安全版）
   const blob = await uriToBlob(localUri, contentType);
-  console.log('[uploadProjectPhoto] blob ready', { size: blob.size, type: blob.type });
+  DLOG('[uploadProjectPhoto] blob ready', { size: blob.size, type: blob.type });
 
   // ファイル名生成（既存の Storage ルートは踏襲）
   const id = (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function')
@@ -207,9 +229,14 @@ export async function uploadProjectPhoto({ projectId, date, localUri, uploadedBy
   // ランタイムでのバケット確認
   try {
     const bucket = storage?.app?.options?.storageBucket;
-    console.log('[uploadProjectPhoto] bucket/path', { bucket, path });
+    DLOG('[uploadProjectPhoto] bucket/path', { bucket, path });
   } catch (_) {}
 
+  const uploader =
+    (uploadedBy && typeof uploadedBy === 'object')
+      ? { by: uploadedBy.by ?? null, byName: uploadedBy.byName ?? null }
+      : { by: uploadedBy ?? null, byName: null };
+  
   // contentType を必ず付与
   try {
     await uploadBytes(fileRef, blob, {
@@ -217,24 +244,25 @@ export async function uploadProjectPhoto({ projectId, date, localUri, uploadedBy
       customMetadata: {
         projectId,
         date,
-        uploadedBy: (typeof uploadedBy === 'object' ? (uploadedBy.by ?? uploadedBy.byName) : uploadedBy) ?? 'unknown',
+        uploadedBy: uploader.by ?? 'unknown',
       },
     });
-    console.log('[uploadProjectPhoto] uploadBytes OK', { path });
+    DLOG('[uploadProjectPhoto] uploadBytes OK', { path });
   } catch (e) {
     const full = JSON.stringify(e, Object.getOwnPropertyNames(e));
     console.log('[uploadProjectPhoto] uploadBytes ERROR', full);
     throw e;
   }
   const url = await getDownloadURL(fileRef);
-  console.log('[uploadProjectPhoto] getDownloadURL OK', { url: String(url).slice(0, 80) });
+  DLOG('[uploadProjectPhoto] getDownloadURL OK', { url: String(url).slice(0, 80) });
 
   const photosCol = collection(db, 'projects', projectId, 'photos');
   const photoDocRef = await addDoc(photosCol, {
     date,
     path,
     url,
-    uploadedBy: (typeof uploadedBy === 'object' ? (uploadedBy.by ?? uploadedBy.byName) : uploadedBy) ?? null,
+    uploadedBy: uploader.by ?? null,
+    uploadedByName: uploader.byName ?? null,
     uploadedAt: serverTimestamp(),
   });
 
@@ -274,22 +302,14 @@ export async function deleteProjectPhoto({ projectId, photoId }) {
    });
   }
   await deleteDoc(photoRef);
-  // 画像削除の履歴
-  try {
-    await addEditLog({
-      projectId,
-      date: null,
-      action: 'delete',
-      target: 'photo',
-      targetId: photoId,
-    });
-  } catch (_) {}
 }
 
 export async function addEditLog({ projectId, date, action, target, targetId, by, byName }) {
+  // actor 未指定時は Auth から補完
+  const actorResolved = await _resolveActorIfNeeded({ by, byName });
+  let finalBy   = actorResolved?.by ?? null;
+  let finalName = actorResolved?.byName ?? null;
   // by/byName の整合性を担保：by は employees の doc.id に正規化し、byName が無ければ解決
-  let finalBy   = by ?? null;
-  let finalName = byName ?? null;
   if (finalBy) {
     const emp = await findEmployeeByIdOrEmail(finalBy);
     if (emp) {
@@ -370,9 +390,11 @@ export async function fetchEditLogs(projectId, date) {
 // ===== コメント追加/取得 =====
 
 export async function addProjectComment({ projectId, date, text, imageUrl, by, byName }) {
+  // actor 未指定時は Auth から補完
+  const actorResolved = await _resolveActorIfNeeded({ by, byName });
+  let finalBy   = actorResolved?.by ?? null;
+  let finalName = actorResolved?.byName ?? null;
   // by/byName の整合性を担保：by は employees の doc.id に正規化し、byName が無ければ解決
-  let finalBy   = by ?? null;
-  let finalName = byName ?? null;
   if (finalBy) {
     const emp = await findEmployeeByIdOrEmail(finalBy);
     if (emp) {
@@ -422,13 +444,31 @@ export async function fetchProjectById(projectId) {
 }
 export async function setProject(projectId, projectData, actor) {
   const docRef = projectId ? doc(projectsCol, projectId) : doc(projectsCol);
-  const toTS = (v) => (v instanceof Date ? Timestamp.fromDate(v) : v ?? null);
+  const toTS = (v) => {
+    if (v === undefined) return undefined;        // ← 未指定は undefined を返して「保存対象にしない」
+    if (v === null) return null;
+    if (v instanceof Date) return Timestamp.fromDate(v);
+    if (v instanceof Timestamp) return v;
+    // 'YYYY-MM-DD' をローカル日付として Timestamp 化（安全）
+    if (typeof v === 'string') {
+      const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m) {
+        const y = Number(m[1]), mo = Number(m[2]) - 1, d = Number(m[3]);
+        return Timestamp.fromDate(new Date(y, mo, d, 0, 0, 0, 0));
+      }
+      const dt = new Date(v);
+      if (!Number.isNaN(dt.getTime())) return Timestamp.fromDate(dt);
+    }
+    return v; // それ以外は呼び出し側の責任で（必要ならthrowにしてもOK）
+  };
  // 追加: 呼び出し側 or Auth から actor を確定
   const actorResolved = await _resolveActorIfNeeded(actor);
   // ❗未指定(startDate/endDateがundefined)なら一切上書きしない
   const base = { ...projectData };
-  if ('startDate' in projectData) base.startDate = toTS(projectData.startDate);
-  if ('endDate'   in projectData) base.endDate   = toTS(projectData.endDate);
+  const s = toTS(projectData?.startDate);
+  const e = toTS(projectData?.endDate);
+  if (s !== undefined) base.startDate = s;
+  if (e !== undefined) base.endDate   = e;
 
   const dataToSave = {
     ...base,
@@ -1286,8 +1326,10 @@ export async function fetchReservationsByYmdRange(startYmd, endYmd) {
   const s1 = await getDocs(query(col, where('dateKey', '>=', startYmd), where('dateKey', '<=', endYmd)));
   s1.docs.forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
   // 2) フォールバック：Timestamp 範囲（古いDocでdateKeyが無い場合）
-  const startTs = Timestamp.fromDate(new Date(`${startYmd}T00:00:00`));
-  const endTs   = Timestamp.fromDate(new Date(`${endYmd}T23:59:59.999`));
+  const sd = ymdToDateLocal(startYmd, false);
+  const ed = ymdToDateLocal(endYmd, true);
+  const startTs = Timestamp.fromDate(sd);
+  const endTs   = Timestamp.fromDate(ed);
   const s2 = await getDocs(query(col, where('date', '>=', startTs), where('date', '<=', endTs)));
   s2.docs.forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
   return [...map.values()];
@@ -1339,7 +1381,7 @@ export async function saveProjectVehiclePlan(projectId, vehiclePlan, datesInRang
       tx.set(ref, {
         projectId,
         vehicleId: want.vehicleId,
-        date: Timestamp.fromDate(new Date(`${want.ymd}T00:00:00`)),
+        date: Timestamp.fromDate(ymdToDateLocal(want.ymd, false)),
         dateKey: want.ymd,
         createdAt: serverTimestamp(),
       }, { merge: true });
@@ -1411,8 +1453,10 @@ export async function fetchAssignmentsByYmdRange(startYmd, endYmd) {
   const map = new Map();
   const s1 = await getDocs(query(colRef, where('dateKey', '>=', startYmd), where('dateKey', '<=', endYmd)));
   s1.docs.forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
-  const startTs = Timestamp.fromDate(new Date(`${startYmd}T00:00:00`));
-  const endTs   = Timestamp.fromDate(new Date(`${endYmd}T23:59:59.999`));
+  const sd = ymdToDateLocal(startYmd, false);
+  const ed = ymdToDateLocal(endYmd, true);
+  const startTs = Timestamp.fromDate(sd);
+  const endTs   = Timestamp.fromDate(ed);
   const s2 = await getDocs(query(colRef, where('date', '>=', startTs), where('date', '<=', endTs)));
   s2.docs.forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
   return [...map.values()];
@@ -1448,7 +1492,7 @@ export async function saveProjectParticipantPlan(projectId, participantPlan, dat
       tx.set(ref, {
         projectId,
         employeeId: want.employeeId,
-        date: Timestamp.fromDate(new Date(`${want.ymd}T00:00:00`)),
+        date: Timestamp.fromDate(ymdToDateLocal(want.ymd, false)),
         dateKey: want.ymd,
         createdAt: serverTimestamp(),
       }, { merge: true });

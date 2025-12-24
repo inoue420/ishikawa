@@ -10,7 +10,6 @@ import {
   RefreshControl,
 } from 'react-native';
 import tw from 'twrnc';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import {
   fetchProjects,
@@ -19,8 +18,6 @@ import {
   findEmployeeByIdOrEmail,
   fetchProjectsOverlappingRange,
   addEditLog,
-} from '../../firestoreService';
-import {
   fetchVehicles,
   fetchVehicleBlocksOverlapping,
   fetchReservationsInRange,
@@ -134,6 +131,17 @@ const toYmd = (d) => {
   return `${y}-${m}-${dd}`;
 };
 
+// YYYY-MM-DD を「ローカル日付(00:00)」として Date 化（UTC解釈を避ける）
+const parseYmdToDateLocal = (ymd) => {
+  const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  const dt = new Date(y, mo, d, 0, 0, 0, 0);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+};
+
 // start〜end の各日を 'YYYY-MM-DD' 配列で返す（両端含む）
 const eachDateKeyInclusive = (start, end) => {
   if (!start || !end) return [];
@@ -219,7 +227,6 @@ export default function ProjectRegisterScreen({ route }) {
       if (emp) setMe(emp);
     })();
   }, [route?.params?.userEmail]);
-
 
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
@@ -424,8 +431,10 @@ export default function ProjectRegisterScreen({ route }) {
       ? Array.from(keySet).sort() // YYYY-MM-DD なので文字列sortでOK
       : (startDate && endDate ? eachDateKeyInclusive(startDate, endDate) : []);
 
-    return keys.map(k => new Date(`${k}T00:00:00`));
-  }, [workStatuses, startDate.getTime(), endDate.getTime()]);
+    // "YYYY-MM-DD" を必ずローカル 00:00 として扱う（UTC解釈でのズレ防止）
+    return keys.map(k => parseYmdToDateLocal(k)).filter(Boolean);
+  }, [workStatuses, startDate?.getTime?.(), endDate?.getTime?.()]);
+
 
   // 当日の「自プロジェクトの時間窓」を返す（workStatuses優先 / 無ければ startDate,endDate の封筒）
   const getMyDayWindow = useCallback((d) => {
@@ -544,7 +553,7 @@ export default function ProjectRegisterScreen({ route }) {
         if (!other) continue;
         const dy = a.dateKey || toYmd(a.date?.toDate?.() ?? new Date(a.date));
         if (!map[dy]) continue;
-        const day = new Date(`${dy}T00:00:00`);
+        const day = parseYmdToDateLocal(dy) || new Date(dy);
         const [meS, meE] = getMyDayWindow(day);
         const [oClampS, oClampE] = getOtherDayWindow(other, day);
         if (overlaps(meS, meE, oClampS, oClampE)) {
@@ -576,7 +585,7 @@ export default function ProjectRegisterScreen({ route }) {
           return next;
         });
       }
-      setEmpAvailLoading(false);
+
       } catch (e) {
         console.log('[emp availability] error', e);
       } finally {
@@ -592,7 +601,6 @@ export default function ProjectRegisterScreen({ route }) {
       if (datesInRange.length === 0) {
         setUnavailableMap({});
         setVehicleSelections({});
-        setAvailLoading(false);
         return;
       }
       const s = datesInRange[0];
@@ -902,18 +910,6 @@ useEffect(() => {
       }
     }
 }, [route?.params, projects, prefillLeftForm, setEditingProjectId]);
-
-
-
-  // ─────────────────────────────────────────────
-  // 時刻ピッカー：ボックスタップですぐ選択 → 選択と同時に即閉じる
-  // iOS: spinner, Android: clock（24h）
-  // ─────────────────────────────────────────────
-  const timePickerProps = {
-    mode: 'time',
-    display: Platform.OS === 'ios' ? 'spinner' : 'clock',
-    is24Hour: true,
-  };
 
 
   // ── ピルUI（タップすると picker を出す） ──
@@ -1280,7 +1276,8 @@ useEffect(() => {
         await clearAssignmentsForProject(projectId);
         for (const [dy, arr] of Object.entries(participantPlan)) {
           for (const empId of arr) {
-            const dateMidnight = new Date(`${dy}T00:00:00`);
+            const dateMidnight =
+              parseYmdToDateLocal(dy) || new Date(`${dy}T00:00:00`);
             await setEmployeeAssignment(projectId, dateMidnight, empId);
           }
         }
@@ -1352,6 +1349,7 @@ useEffect(() => {
       }
     } catch (e) {
       console.error('[handleSubmit] error', e);
+      DBG('[PRS] handleSubmit error', String(e?.message || e));
       const msg = String(e?.message || e);
       if (msg.startsWith('CONFLICT')) {
         Alert.alert(

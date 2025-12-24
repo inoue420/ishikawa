@@ -363,9 +363,10 @@ export default function ScheduleScreen({ navigation, route }) {
   const ensureAssignmentsForMonth = useCallback(async () => {
     if (assignMap) return assignMap;
     try {
-      const s = new Date(monthStart); s.setHours(0,0,0,0);
-      const e = new Date(monthEnd);   e.setHours(23,59,59,999);
-      const rows = await fetchAssignmentsByYmdRange?.(s, e);
+      // fetchAssignmentsByYmdRange は 'YYYY-MM-DD' を受け取る想定（TZズレ回避のため）
+      const startYmd = toDateString(monthStart);
+      const endYmd   = toDateString(monthEnd);
+      const rows = await fetchAssignmentsByYmdRange?.(startYmd, endYmd);
       if (!rows || !Array.isArray(rows)) return null;
       // ▼ employees を読み込み、id/email/loginId → name を解決可能にする
       const empIdx = await ensureEmployeeIndex();
@@ -408,6 +409,8 @@ export default function ScheduleScreen({ navigation, route }) {
       const inMonth = (p) => {
         const s0 = fromTimestampOrString(p.startDate);
         const e0 = fromTimestampOrString(p.endDate || p.startDate);
+        // 日付が壊れているデータが混ざっても検索自体が落ちないようにする
+        if (!s0 || !e0) return true;
         const s = new Date(s0.getFullYear(), s0.getMonth(), s0.getDate());
         const e = new Date(e0.getFullYear(), e0.getMonth(), e0.getDate());
         return !(e < monthStart || s > monthEnd);
@@ -520,10 +523,16 @@ export default function ScheduleScreen({ navigation, route }) {
       });
     });
 
-    // 2) 各日で優先度ソート → 上から lane に詰める
-    for (const [k, segs] of byDay.entries()) {
-      // 複数日を最優先（true=0, false=1）→ 開始日時古い順 → タイトル/キー
-      segs.sort((a, b) => {
+    // 2) レーンを“前日から引き継ぎ”して、複数日バーが途中で消えないようにする
+    const allKeys = Array.from(byDay.keys()).sort((a, b) => a.localeCompare(b));
+    let prevLaneMeta = Array(MAX_LANES).fill(null); // [{ projectKey, endKey }]
+
+    for (const k of allKeys) {
+      const segs = byDay.get(k) || [];
+      const segByKey = new Map(segs.map(s => [s.projectKey, s]));
+
+      // 優先度ソート（※“新規で入れる時”の順序に使う）
+      const sorted = [...segs].sort((a, b) => {
         const ap = a.isMulti ? 0 : 1;
         const bp = b.isMulti ? 0 : 1;
         if (ap !== bp) return ap - bp;
@@ -532,19 +541,42 @@ export default function ScheduleScreen({ navigation, route }) {
         return a.projectKey.localeCompare(b.projectKey);
       });
 
-      const info = ensureDay(k);
-      let used = 0;
-      for (let i = 0; i < segs.length; i++) {
-        const seg = segs[i];
-        if (used >= MAX_LANES) {
-          info.overflow += 1;
-          continue;
+      const lanesToday = Array(MAX_LANES).fill(null);
+      const usedKeys = new Set();
+
+      // (1) 前日レーンの継続案件を同じレーンに固定
+      for (let i = 0; i < MAX_LANES; i++) {
+        const prev = prevLaneMeta[i];
+        if (!prev) continue;
+        // 同一セグメント継続：今日もこの projectKey がアクティブで、かつendKeyが今日以降
+        if (prev.endKey >= k && segByKey.has(prev.projectKey)) {
+          lanesToday[i] = segByKey.get(prev.projectKey); // 今日のseg（dayIdx等が正しい）
+          usedKeys.add(prev.projectKey);
         }
-        // この日の表示情報
+      }
+
+      // (2) 空レーンに新規案件を詰める
+      for (const seg of sorted) {
+        if (usedKeys.has(seg.projectKey)) continue;
+        const empty = lanesToday.findIndex(x => !x);
+        if (empty === -1) break;
+        lanesToday[empty] = seg;
+        usedKeys.add(seg.projectKey);
+      }
+
+      // overflow 計算（その日のアクティブ総数 - 表示数）
+      const activeUnique = new Set(segs.map(s => s.projectKey));
+      const shownUnique = new Set(lanesToday.filter(Boolean).map(s => s.projectKey));
+      const overflow = Math.max(0, activeUnique.size - shownUnique.size);
+
+      const info = ensureDay(k);
+      info.overflow = overflow;
+      info.lanes = lanesToday.map((seg) => {
+        if (!seg) return null;
         const isStart = k === toDateString(seg.segStart);
         const isEnd   = k === toDateString(seg.segEnd);
-        const showLabel = (seg.dayIdx === seg.midIdx); // 中央日のみラベル
-        info.lanes[used] = {
+        const showLabel = (seg.dayIdx === seg.midIdx);
+        return {
           title: seg.title,
           color: seg.color,
           isStart,
@@ -553,8 +585,13 @@ export default function ScheduleScreen({ navigation, route }) {
           segLen: seg.segLen,
           midIdx: seg.midIdx,
         };
-        used += 1;
-      }
+      });
+
+      // 次日へ引き継ぐメタ（endKeyはYYYY-MM-DD文字列で比較できる）
+      prevLaneMeta = lanesToday.map(seg => {
+        if (!seg) return null;
+        return { projectKey: seg.projectKey, endKey: toDateString(seg.segEnd) };
+      });
     }
 
     return layout;
@@ -624,7 +661,8 @@ export default function ScheduleScreen({ navigation, route }) {
                   alignItems: 'center',
                   position: 'relative',     // オーバーレイの基準
                   overflow: 'visible',      // 横にはみ出すため
-                  borderBottomLeftRadius:isStart ? 6 : 0,
+                  borderBottomLeftRadius: isStart ? 6 : 0,
+                  borderTopLeftRadius:    isStart ? 6 : 0,
                   borderTopRightRadius:  isEnd   ? 6 : 0,
                   borderBottomRightRadius:isEnd  ? 6 : 0,
                 }}

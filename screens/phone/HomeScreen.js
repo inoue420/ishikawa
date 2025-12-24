@@ -85,10 +85,11 @@ export default function HomeScreen({ navigation, route }) {
 
   const dateOnly = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 
-  const workStatusInitialForSelectedDate = (proj) => {
+  // ★ 追加：選択日に該当する「工程(workStatus)」を1つ決める（タイトルと時刻で共通利用）
+  const pickWorkStatusForDate = (proj, targetDate) => {
     const list = Array.isArray(proj?.workStatuses) ? proj.workStatuses : [];
-    if (!list.length) return '';
-    const target = dateOnly(selectedDate).getTime();
+    if (!list.length) return null;
+    const t = dateOnly(targetDate).getTime();
 
     const matches = list
       .map((ws) => {
@@ -100,15 +101,22 @@ export default function HomeScreen({ navigation, route }) {
       .filter((ws) => {
         const s = dateOnly(ws._s).getTime();
         const e = dateOnly(ws._e).getTime();
-        return s <= target && target <= e;
+        return s <= t && t <= e;
       })
-      .sort((a, b) => a._s - b._s);
+      // PDSと同じ優先度に寄せる：確定→開始が早い→type
+      .sort((a, b) => {
+        const af = a.scheduleStatus === 'fixed' ? 0 : 1;
+        const bf = b.scheduleStatus === 'fixed' ? 0 : 1;
+        if (af !== bf) return af - bf;
+        const as = a._s ? a._s.getTime() : 0;
+        const bs = b._s ? b._s.getTime() : 0;
+        if (as !== bs) return as - bs;
+        return String(a.type).localeCompare(String(b.type));
+      });
 
-    if (!matches.length) return '';
-    const ws = matches[0];
-    const label = String(ws?.label || WORK_STATUS_LABEL_MAP[ws?.type] || '').trim();
-    return label ? label.charAt(0) : '';
+    return matches[0] || null;
   };
+
 
   // ★ name から【場所】を抽出
   const parseNameForLocation = (fullName) => {
@@ -117,13 +125,14 @@ export default function HomeScreen({ navigation, route }) {
     return { loc: null, plain: String(fullName || '') };
   };
   // ★ 表示名：限定公開なら「限定公開　」を括弧内の先頭に入れる
-  const displayTitle = (proj) => {
+  const displayTitle = (proj, wsPicked) => {
     const raw = proj.name || proj.title || '（名称未設定）';
     const { loc, plain } = parseNameForLocation(raw);
     const locFinal = proj.location || loc || '';
     if (!locFinal) return raw; // 念のため
     const prefix = proj?.visibility === 'limited' ? '限定公開　' : '';
-    const workInitial = workStatusInitialForSelectedDate(proj);
+    const label = String(wsPicked?.label || WORK_STATUS_LABEL_MAP[wsPicked?.type] || '').trim();
+    const workInitial = label ? label.charAt(0) : '';
     const locLabel = workInitial ? `${workInitial}　${locFinal}` : locFinal;
     return `【${prefix}${locLabel}】${plain}`;
   };
@@ -244,8 +253,14 @@ export default function HomeScreen({ navigation, route }) {
           <Text style={tw`text-center text-gray-500`}>本日のプロジェクトはありません</Text>
         ) : (
           projects.map(proj => {
-            const start = asDate(proj.startDate) || asDate(proj.start) || asDate(proj.startAt);
-            const end   = asDate(proj.endDate)   || asDate(proj.end)   || asDate(proj.endAt);
+            // ★ 選択日の工程を先に決める（この工程のstart/endを左側に出す）
+            const wsPicked = pickWorkStatusForDate(proj, selectedDate);
+            const start =
+              wsPicked?._s ||
+              asDate(proj.startDate) || asDate(proj.start) || asDate(proj.startAt);
+            const end =
+              wsPicked?._e ||
+              asDate(proj.endDate) || asDate(proj.end) || asDate(proj.endAt);
             const startTime = fmtHM(start);
             const endTime   = fmtHM(end);
             const memberNames = membersOf(proj);
@@ -261,7 +276,11 @@ export default function HomeScreen({ navigation, route }) {
                     Alert.alert('閲覧できません', 'このプロジェクトは限定公開です（役員・部長・事務のみ）。');
                     return;
                   }
-                  navigation.navigate('ProjectDetail', { projectId: proj.id, date: dateKey(selectedDate) });
+                  navigation.navigate('ProjectDetail', {
+                    projectId: proj.id,
+                    date: dateKey(selectedDate),
+                    userEmail, // ★ ついでに渡しておくとPDS側の投稿者解決が安定
+                  });
                 }}
                 activeOpacity={0.75}
                 style={tw`mb-3`}
@@ -281,7 +300,7 @@ export default function HomeScreen({ navigation, route }) {
                   {/* 中央：カード（高さ確保のため minHeight を付与） */}
                   <View style={[tw`flex-1 bg-white rounded-xl shadow p-3 border border-gray-100 relative`, { minHeight: 56 }]}>
                     <Text style={tw`text-base font-bold`} numberOfLines={1}>
-                      {displayTitle(proj)}
+                      {displayTitle(proj, wsPicked)}
                     </Text>
                     <Text style={tw`text-gray-500 mt-1`} numberOfLines={1}>
                       {memberNames.length ? memberNames.join('、') : 'メンバー未設定'}
