@@ -8,13 +8,20 @@ export default function PunchScreen({ route }) {
   const { userEmail } = route.params;
   const [message, setMessage] = useState('');
 
+  const dateKeyLocal = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+  
   const record = async (type) => {
     const now = new Date();
     await addDoc(collection(db, 'attendanceRecords'), {
       userEmail,
       type,
       timestamp: Timestamp.fromDate(now),
-      dateStr: now.toISOString().slice(0, 10),
+      dateStr: dateKeyLocal(now),
     });
     setMessage(`${type === 'in' ? '出勤' : '退勤'}: ${now.toLocaleTimeString()}`);
   };

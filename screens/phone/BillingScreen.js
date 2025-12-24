@@ -41,7 +41,12 @@ export default function BillingScreen() {
   const [previewHTML, setPreviewHTML] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
 
-  const formatISO = (d) => d.toISOString().slice(0, 10);
+  const formatISO = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
 
   const diffDays = (d1, d2) =>
     Math.floor((d2 - d1) / (1000 * 3600 * 24)) + 1;

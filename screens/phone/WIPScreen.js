@@ -57,7 +57,24 @@ export default function WIPScreen() {
     })();
   }, []);
 
-  const pToDate = ts => ts.toDate ? ts.toDate() : new Date(ts);
+  const pToDate = (v) => {
+    if (!v) return null;
+    if (v?.toDate) return v.toDate();
+    if (typeof v === 'string') {
+      const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    }
+    const d = new Date(v);
+    return isNaN(d) ? null : d;
+  };
+
+  const formatYmdLocal = (d) => {
+    if (!d) return '—';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
 
   // ── ② 通常請求：請求書発行
   const onInvoice = async projId => {
@@ -215,7 +232,7 @@ export default function WIPScreen() {
         <View style={tw`mb-4 bg-white p-4 rounded-lg shadow`}>
           <Text style={tw`text-lg font-bold mb-1`}>{p.name}</Text>
           <Text>顧客: {p.clientName}</Text>
-          <Text>終了予定: {pToDate(p.endDate).toISOString().slice(0,10)}</Text>
+          <Text>終了予定: {formatYmdLocal(pToDate(p.endDate))}</Text>
 
           {/* ← 請求方式切替ボタン */}
           <View style={tw`mt-2 mb-4`}>

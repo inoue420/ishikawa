@@ -47,6 +47,17 @@ export default function HomeScreen({ navigation, route }) {
     if (!v) return null;
     if (v instanceof Date) return v;
     if (v?.toDate) return v.toDate();
+    // 'YYYY-MM-DD' は UTC 解釈されるため、ローカル日付としてパースする
+    if (typeof v === 'string') {
+      const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m) {
+        const y = Number(m[1]);
+        const mo = Number(m[2]) - 1;
+        const d0 = Number(m[3]);
+        const dt = new Date(y, mo, d0);
+        return Number.isNaN(dt.getTime()) ? null : dt;
+      }
+    }
     const d = new Date(v);
     return isNaN(d) ? null : d;
   };
