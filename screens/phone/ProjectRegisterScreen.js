@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo  } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -295,6 +295,9 @@ export default function ProjectRegisterScreen({ route }) {
   // ── 作業ステータス（工程）用 state ──
   const [workStatuses, setWorkStatuses] = useState([]); // {id,type,label,startDate,endDate,employeeIds,vehicleIds,expanded} の配列
 
+  const vehiclePlanPrefilledRef = useRef(false);
+  const participantPlanPrefilledRef = useRef(false);
+
  // ★追加: 作業ステータスの開始・終了からプロジェクト全体の開始・終了を自動反映
  useEffect(() => {
    const dated = (workStatuses || []).filter(ws => ws?.startDate && ws?.endDate);
@@ -564,6 +567,18 @@ export default function ProjectRegisterScreen({ route }) {
 
       // 編集時は自案件の既存割当てをプリフィル
       if (editingProjectId) {
+        // ★ participantPlan でプリフィル済みなら assignments で上書きしない
+        if (participantPlanPrefilledRef.current) {
+          setParticipantSelectionsByDay((prev) => {
+            const next = {};
+            const allowed = new Set(Object.keys(map));
+            for (const [k, v] of Object.entries(prev || {})) {
+              if (allowed.has(k)) next[k] = v;
+            }
+            return next;
+          });
+          return;
+        }
         const mine = await fetchAssignmentsForProject(editingProjectId);
         const next = {};
         for (const r of mine) {
@@ -692,6 +707,10 @@ export default function ProjectRegisterScreen({ route }) {
 
       // 編集時：自プロジェクトの既存予約でプリフィル
       if (editingProjectId) {
+      // ★ vehiclePlan でプリフィル済みなら予約からの上書きを禁止
+      if (vehiclePlanPrefilledRef.current) {
+        return;
+      }
         const mine = await fetchReservationsForProject(editingProjectId);
         const next = {};
         for (const r of mine) {
@@ -770,11 +789,21 @@ export default function ProjectRegisterScreen({ route }) {
     return { loc: null, plain: String(fullName || '') };
   };
 
+  // ★ 旧データ救済： "限定公開　富山市" -> { limited:true, location:"富山市" }
+  const normalizeBracketLoc = (locRaw) => {
+    const s = String(locRaw || '').trim();
+    // 半角/全角スペース両対応
+    const m = s.match(/^限定公開[\s　]+(.+)$/);
+    if (m) return { limited: true, location: (m[1] || '').trim() };
+    return { limited: false, location: s || null };
+  };
+
   const prefillLeftForm = useCallback((src, { appendCopySuffix = false } = {}) => {
     // name から【場所】を分離（src.location があれば優先）
     const parsed = parseNameForLocation(src.name);
-    const loc = src.location || parsed.loc;
-    const plainName = src.location ? parsed.plain || parsed.plain === '' ? parsed.plain : src.name : parsed.plain;
+    const fromName = normalizeBracketLoc(parsed.loc);
+    const loc = src.location || fromName.location;
+    const plainName = parsed.plain ?? '';
     setName(plainName ? (appendCopySuffix ? `${plainName} (コピー)` : plainName) : '');
     setClientName(src.clientName ?? '');
     const s = toSafeDate(src.startDate) ?? roundToHour(new Date());
@@ -790,7 +819,10 @@ export default function ProjectRegisterScreen({ route }) {
       setStatus('prospect');
     }
 
-    setVisibilityLimited((src.visibility ?? 'public') === 'limited');
+    // visibility が無い旧データは name 側の "限定公開" を尊重
+    const vis =
+      (src.visibility ? (src.visibility === 'limited') : fromName.limited);
+    setVisibilityLimited(!!vis);
     setOrderAmount(src.orderAmount != null ? formatThousandsInput(String(src.orderAmount)) : '');
     setTravelCost(src.travelCost != null ? formatThousandsInput(String(src.travelCost)) : '');
     setMiscExpense(src.miscExpense != null ? formatThousandsInput(String(src.miscExpense)) : '');
@@ -867,12 +899,25 @@ export default function ProjectRegisterScreen({ route }) {
     }
 
     if (src.participantPlan && typeof src.participantPlan === 'object') {
+      participantPlanPrefilledRef.current = true;
       const next = {};
       Object.entries(src.participantPlan).forEach(([dy, arr]) => {
         next[dy] = new Set(arr || []);
       });
       setParticipantSelectionsByDay(next);
     }
+  // ★ vehiclePlan があれば編集/コピー時の車両選択を正確に復元
+  if (src.vehiclePlan && typeof src.vehiclePlan === 'object') {
+    vehiclePlanPrefilledRef.current = true;
+    const nextV = {};
+    for (const [dy, v] of Object.entries(src.vehiclePlan)) {
+      if (!v) continue;
+      const sales = v.sales ?? undefined;
+      const cargo = v.cargo ?? undefined;
+      if (sales || cargo) nextV[dy] = { sales, cargo };
+    }
+    setVehicleSelections(nextV);
+  }    
   }, []); 
 
 
@@ -1097,28 +1142,30 @@ useEffect(() => {
     const workStatusesForSave =
       workStatuses.length > 0
         ? workStatuses.map((ws) => {
-            const employeeIds =
-              Array.isArray(ws.employeeIds) && ws.employeeIds.length
-                ? ws.employeeIds
-                : participants;
-            const vehicleIds =
-              Array.isArray(ws.vehicleIds) && ws.vehicleIds.length
-                ? ws.vehicleIds
-                : vehicleIdsUnion;
+          const hasDates = !!(ws.startDate && ws.endDate);
 
-            const hasDates = !!(ws.startDate && ws.endDate);
-            const hasEmployees = employeeIds.length > 0;
-            const hasVehicles = vehicleIds.length > 0;
+          // ✅ 「未確定(pending)」の工程を勝手に fixed にしない
+          // - 新規作成/未反映の工程は employeeIds/vehicleIds を空のまま保持して pending を維持
+          // - 旧データ救済：すでに fixed だったのに employeeIds/vehicleIds が空のケースだけ、
+          //   日別プラン（participants / vehicleIdsUnion）から補完する
+          const legacyFixed = ws?.scheduleStatus === 'fixed';
 
-            const scheduleStatus =
-              hasDates && hasEmployees && hasVehicles ? 'fixed' : 'pending';
+          const employeeIdsRaw = Array.isArray(ws.employeeIds) ? ws.employeeIds : [];
+          const vehicleIdsRaw  = Array.isArray(ws.vehicleIds) ? ws.vehicleIds : [];
 
-            // dateKeys は、個別確定ボタンで設定されたものがあればそれを使用し、
-            // なければ開始〜終了の連続日を自動生成
-            const dateKeys =
-              Array.isArray(ws.dateKeys) && ws.dateKeys.length
-                ? ws.dateKeys
-                : eachDateKeyInclusive(ws.startDate, ws.endDate);
+          const employeeIds =
+            employeeIdsRaw.length ? employeeIdsRaw : (legacyFixed ? participants : []);
+          const vehicleIds =
+            vehicleIdsRaw.length ? vehicleIdsRaw : (legacyFixed ? vehicleIdsUnion : []);
+
+          const hasEmployees = employeeIds.length > 0;
+          const hasVehicles  = vehicleIds.length > 0;
+
+          const scheduleStatus =
+            hasDates && hasEmployees && hasVehicles ? 'fixed' : 'pending';
+
+          // ✅ dateKeys は「現在の start/end から毎回生成」して保存（古い dateKeys が残る事故を防ぐ）
+          const dateKeys = hasDates ? eachDateKeyInclusive(ws.startDate, ws.endDate) : [];
 
             return {
               ...ws,
@@ -1191,9 +1238,10 @@ useEffect(() => {
 
       laborCost,
       rentalResourceCost,
-      ...(hasAnySelection ? { vehiclePlan } : {}),
-      ...(hasAnyParticipants ? { participantPlan } : {}),
-      ...(workStatusesPayload ? { workStatuses: workStatusesPayload } : {}), // ★ここを追加
+    // ★ 空でも送って「旧データ残り」を防ぐ（merge:true 対策）
+    vehiclePlan: hasAnySelection ? vehiclePlan : {},
+    participantPlan: hasAnyParticipants ? participantPlan : {},
+    workStatuses: workStatusesPayload ? workStatusesPayload : [],
     };
 
 
@@ -1344,12 +1392,14 @@ useEffect(() => {
         setLocationOtherText('');
         setVisibilityLimited(false);
         setVehicleSelections({});
-        setWorkStatuses([]); // ★ 作業ステータスもクリア        
+        setWorkStatuses([]); // ★ 作業ステータスもクリア
+        vehiclePlanPrefilledRef.current = false;
+        participantPlanPrefilledRef.current = false;
         Alert.alert('成功', 'プロジェクトを追加しました');
       }
     } catch (e) {
       console.error('[handleSubmit] error', e);
-      DBG('[PRS] handleSubmit error', String(e?.message || e));
+      console.log('[PRS] handleSubmit error', String(e?.message || e));
       const msg = String(e?.message || e);
       if (msg.startsWith('CONFLICT')) {
         Alert.alert(
