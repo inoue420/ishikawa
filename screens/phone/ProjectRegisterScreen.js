@@ -425,6 +425,19 @@ export default function ProjectRegisterScreen({ route }) {
       .slice(0, 5);
   }, [clients, clientSearch]);
 
+  // ★編集/コピー/切替時のズレ救済：
+  // - 既存モードで selectedClientId が無いが、clientName/clientSearch が既存顧客と一致するなら自動で紐付け
+  useEffect(() => {
+    if (projectType !== 'existing') return;
+    if (selectedClientId) return;
+    const base = String(clientName || clientSearch || '').trim().toLowerCase();
+    if (!base) return;
+    const hit = (clients || []).find(c => {
+      const nm = String(c.nameLower || c.name || '').trim().toLowerCase();
+      return nm === base;
+    });
+    if (hit?.id) setSelectedClientId(hit.id);
+  }, [projectType, selectedClientId, clients, clientName, clientSearch]);  
 
   // ===== 車両関連 =====
   const [vehicles, setVehicles] = useState([]);
@@ -834,6 +847,8 @@ export default function ProjectRegisterScreen({ route }) {
     const plainName = parsed.plain ?? '';
     setName(plainName ? (appendCopySuffix ? `${plainName} (コピー)` : plainName) : '');
     setClientName(src.clientName ?? '');
+    setClientSearch(src.clientName ?? '');
+    setSelectedClientId(src.clientId ?? null);
     const s = toSafeDate(src.startDate) ?? roundToHour(new Date());
     const e = toSafeDate(src.endDate) ?? s;
     setStartDate(s);
@@ -1094,7 +1109,20 @@ useEffect(() => {
     if (locationChoice === LOCATION_OTHER && !locationOtherText.trim()) {
       return Alert.alert('入力エラー', 'その他地域名を入力してください');
     }
-    if (!clientName.trim()) {
+    if (!projectType) {
+      return Alert.alert('入力エラー', '案件区分を選択してください');
+    }
+
+    // ★案件区分に応じて「保存用の顧客名」を確定（既存=検索 or 選択 / 新規=入力）
+    const clientNameForSave = (() => {
+      if (projectType === 'existing') {
+        const hit = (clients || []).find(c => c.id === selectedClientId);
+        return String(hit?.name || clientSearch || clientName || '').trim();
+      }
+      return String(clientName || '').trim();
+    })();
+
+    if (!clientNameForSave) {
       return Alert.alert('入力エラー', '顧客名を入力してください');
     }
 
@@ -1228,7 +1256,7 @@ useEffect(() => {
     
     const payload = {
       name: finalName,
-      clientName: clientName.trim(),
+      clientName: clientNameForSave,
       startDate,
       endDate,
       // 役割は ID（社員選択時のみ）を保存、その他は *_OtherName に保存
@@ -1303,7 +1331,7 @@ useEffect(() => {
         payload.clientId = selectedClientId;
       } else {
         try {
-          const ensured = await ensureClientByName(clientName.trim(), null, actor);
+          const ensured = await ensureClientByName(clientNameForSave, null, actor);
           if (ensured?.id) payload.clientId = ensured.id;
         } catch (e) {
           console.warn('[ensureClientByName] failed', e);
@@ -1551,14 +1579,27 @@ useEffect(() => {
         <Text>案件区分</Text>
         <View style={tw`flex-row mb-2`}>
           <TouchableOpacity
-            onPress={() => setProjectType('new')}
+            onPress={() => {
+              setProjectType('new');
+              // existing 側の状態を残さない
+              setSelectedClientId(null);
+              // 既存検索に入力していた文字は、新規入力へ引き継ぐ（空なら）
+              setClientName((prev) => prev || clientSearch || '');
+              setClientSearch('');
+            }}
             style={tw`${projectType === 'new' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-4 py-2 mr-2`}
             activeOpacity={0.7}
           >
             <Text>{projectType === 'new' ? '● ' : '○ '}新規</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            onPress={() => setProjectType('existing')}
+            onPress={() => {
+              setProjectType('existing');
+              // new 側の選択状態を残さない
+              setSelectedClientId(null);
+              // 新規入力していた文字は、既存検索へ引き継ぐ（空なら）
+              setClientSearch((prev) => prev || clientName || '');
+            }}
             style={tw`${projectType === 'existing' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-4 py-2`}
             activeOpacity={0.7}
           >
@@ -1567,59 +1608,74 @@ useEffect(() => {
         </View>
 
 
-        <Text>顧客（既存顧客を検索して選択）</Text>
-        <TextInput
-          value={clientSearch}
-          onChangeText={(t) => {
-            setClientSearch(t);
-            // 手入力で検索を変えたら「既存選択状態」は解除（誤って別顧客名を保存しないため）
-            setSelectedClientId(null);
-          }}
-          placeholder="例：シャープライズ"
-          style={tw`border p-2 mb-2 rounded`}
-        />
+        {/* 顧客入力（案件区分に応じて1つだけ表示） */}
+        {!projectType && (
+          <Text style={tw`text-xs text-gray-600 mb-2`}>
+            ※ 先に「案件区分」を選択してください。
+          </Text>
+        )}
 
-        {clientSuggestions.length > 0 && (
-          <View style={tw`mb-2`}>
-            {clientSuggestions.map((c) => (
+        {projectType === 'existing' && (
+          <View>
+            <Text>顧客（既存顧客を検索して選択）</Text>
+            <TextInput
+              value={clientSearch}
+              onChangeText={(t) => {
+                setClientSearch(t);
+                // 手入力で検索を変えたら「既存選択状態」は解除（誤って別顧客名を保存しないため）
+                setSelectedClientId(null);
+              }}
+              placeholder="例：シャープライズ"
+              style={tw`border p-2 mb-2 rounded`}
+            />
+
+            {clientSuggestions.length > 0 && (
+              <View style={tw`mb-2`}>
+                {clientSuggestions.map((c) => (
+                  <TouchableOpacity
+                    key={c.id}
+                    onPress={() => {
+                      setSelectedClientId(c.id);
+                      setClientName(c.name || '');
+                      setClientSearch(c.name || '');
+                    }}
+                    activeOpacity={0.7}
+                    style={tw`px-3 py-2 bg-gray-100 rounded mb-1`}
+                  >
+                    <Text>{c.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            {selectedClientId && (
               <TouchableOpacity
-                key={c.id}
                 onPress={() => {
-                  setSelectedClientId(c.id);
-                  setClientName(c.name || '');
-                  setClientSearch(c.name || '');
+                  setSelectedClientId(null);
                 }}
                 activeOpacity={0.7}
-                style={tw`px-3 py-2 bg-gray-100 rounded mb-1`}
+                style={tw`self-start px-3 py-2 bg-gray-200 rounded mb-2`}
               >
-                <Text>{c.name}</Text>
+                <Text>既存顧客の選択を解除</Text>
               </TouchableOpacity>
-            ))}
+            )}
           </View>
         )}
 
-        <Text>顧客名（新規顧客はここに入力）</Text>
-        <TextInput
-          value={clientName}
-          onChangeText={(t) => {
-            setClientName(t);
-            // 顧客名を触ったら「既存選択状態」は解除
-            setSelectedClientId(null);
-          }}
-          editable={!selectedClientId}
-          placeholder="例：新規の顧客名"
-          style={tw`border p-2 mb-2 rounded ${selectedClientId ? 'bg-gray-100' : ''}`}
-        />
-        {selectedClientId && (
-          <TouchableOpacity
-            onPress={() => {
-              setSelectedClientId(null);
-            }}
-            activeOpacity={0.7}
-            style={tw`self-start px-3 py-2 bg-gray-200 rounded mb-2`}
-          >
-            <Text>既存顧客の選択を解除</Text>
-          </TouchableOpacity>
+        {projectType === 'new' && (
+          <View>
+            <Text>顧客名（新規顧客）</Text>
+            <TextInput
+              value={clientName}
+              onChangeText={(t) => {
+                setClientName(t);
+                // 新規入力中は既存選択は必ず解除
+                setSelectedClientId(null);
+              }}
+              placeholder="例：新規の顧客名"
+              style={tw`border p-2 mb-2 rounded`}
+            />
+          </View>
         )}
 
 
