@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -15,6 +15,7 @@ import {
   updateBillingStatus,
   updateBillingAmount,
   deleteBillingEntry, 
+  fetchClients,
 } from '../../firestoreService';
 
 export default function WIPScreen() {
@@ -23,12 +24,21 @@ export default function WIPScreen() {
   const [billingsMap, setBillingsMap] = useState({});
   const [inputs, setInputs]     = useState({});
   const [billingInputsMap, setBillingInputsMap] = useState({});
+  const [clients, setClients] = useState([]);
+  const [clientQuery, setClientQuery] = useState('');
+  const [closeFilter, setCloseFilter] = useState('all'); // 'all' | 'day' | 'eom'  
   const navigation = useNavigation();
 
   // ── ① 画面立ち上げ時に WIP 一覧を取得
   useEffect(() => {
     (async () => {
       setLoading(true);
+      try {
+        const cs = await fetchClients();
+        setClients(cs);
+      } catch (e) {
+        console.warn(e);
+      }
       const all = await fetchProjects();
       const wip = [];
       const initialInputs = {};
@@ -75,6 +85,42 @@ export default function WIPScreen() {
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
   };
+
+  const formatCloseLabel = (c) => {
+    if (!c) return '';
+    if (c.closeType === 'eom') return '末締め';
+    const d = Number(c.closeDay);
+    if (Number.isFinite(d) && d >= 1 && d <= 31) return `毎月${d}日`;
+    return '未設定';
+  };
+
+  const clientsById = useMemo(
+    () => Object.fromEntries((clients || []).map(c => [c.id, c])),
+    [clients]
+  );
+
+  const findClientForProject = (p) => {
+    if (!p) return null;
+    if (p.clientId && clientsById[p.clientId]) return clientsById[p.clientId];
+    const lower = String(p.clientName || '').trim().toLowerCase();
+    if (!lower) return null;
+    return (clients || []).find(c => String(c.nameLower || c.name || '').toLowerCase() === lower) || null;
+  };
+
+  const filteredProjects = useMemo(() => {
+    const q = String(clientQuery || '').trim().toLowerCase();
+    return (projects || []).filter(p => {
+      const c = findClientForProject(p);
+      const nameHit =
+        !q ||
+        String(p.clientName || '').toLowerCase().includes(q) ||
+        String(c?.name || '').toLowerCase().includes(q);
+      if (!nameHit) return false;
+      if (closeFilter === 'all') return true;
+      if (!c) return false;
+      return c.closeType === closeFilter;
+    });
+  }, [projects, clients, clientsById, clientQuery, closeFilter]);
 
   // ── ② 通常請求：請求書発行
   const onInvoice = async projId => {
@@ -225,13 +271,43 @@ export default function WIPScreen() {
   return (
     <SafeAreaView edges={['top']} style={tw`flex-1`}>
       <FlatList
-        data={projects}
+        data={filteredProjects}
         keyExtractor={p => p.id}
         contentContainerStyle={tw`p-4 bg-gray-100`}
-        renderItem={({ item: p }) => (
+        ListHeaderComponent={
+          <View style={tw`mb-4`}>
+            <Text style={tw`text-xl font-bold mb-2`}>WIP</Text>
+            <TextInput
+              style={tw`border p-2 rounded bg-white`}
+              placeholder="顧客名で検索"
+              value={clientQuery}
+              onChangeText={setClientQuery}
+            />
+            <View style={tw`flex-row mt-2`}>
+              <TouchableOpacity onPress={() => setCloseFilter('all')} activeOpacity={0.7}
+                style={tw`${closeFilter === 'all' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-3 py-2 mr-2`}>
+                <Text>{closeFilter === 'all' ? '● ' : '○ '}全て</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setCloseFilter('day')} activeOpacity={0.7}
+                style={tw`${closeFilter === 'day' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-3 py-2 mr-2`}>
+                <Text>{closeFilter === 'day' ? '● ' : '○ '}毎月◯日</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setCloseFilter('eom')} activeOpacity={0.7}
+                style={tw`${closeFilter === 'eom' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-3 py-2`}>
+                <Text>{closeFilter === 'eom' ? '● ' : '○ '}末締め</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={tw`text-xs text-gray-600 mt-2`}>
+              ※締め日が未登録の顧客は「毎月◯日/末締め」では絞り込めません。
+            </Text>
+          </View>
+        }
+        renderItem={({ item: p }) => {
+          const c = findClientForProject(p);
+          return (
         <View style={tw`mb-4 bg-white p-4 rounded-lg shadow`}>
           <Text style={tw`text-lg font-bold mb-1`}>{p.name}</Text>
-          <Text>顧客: {p.clientName}</Text>
+          <Text>顧客: {p.clientName}{c ? `（締め日: ${formatCloseLabel(c)}）` : ''}</Text>
           <Text>終了予定: {formatYmdLocal(pToDate(p.endDate))}</Text>
 
           {/* ← 請求方式切替ボタン */}
@@ -344,7 +420,8 @@ export default function WIPScreen() {
             </>
           )}
         </View>
-        )}
+          );
+        }}
       />
     </SafeAreaView>
   );

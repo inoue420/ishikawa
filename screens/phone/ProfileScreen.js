@@ -136,6 +136,9 @@ export default function ProfileScreen({ navigation }) {
           <Button title="車両登録" onPress={() => navigation.navigate('VehicleRegister')} />
         </View>   
         <View style={styles.buttonWrapper}>
+          <Button title="顧客情報" onPress={() => navigation.navigate('ClientInfo')} />
+        </View>
+        <View style={styles.buttonWrapper}>
           <Button title="CSV出力設定へ" onPress={() => navigation.navigate('ExportSettings')} />
         </View>
         <View style={styles.buttonWrapper}>

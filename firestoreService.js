@@ -80,6 +80,7 @@ function base64ToUint8Array(b64) {
 // コレクション定義
 const usersCol           = collection(db, 'users');
 const projectsCol        = collection(db, 'projects');
+const clientsCol         = collection(db, 'clients');
 const attendanceCol      = collection(db, 'attendanceRecords');
 const materialsListCol   = collection(db, 'materialsList');
 const materialsRecCol    = collection(db, 'materialsRecords');
@@ -436,6 +437,100 @@ export async function fetchProjects() {
   const snaps = await getDocs(projectsCol);
   return snaps.docs.map(d => ({ id: d.id, ...d.data() }));
 }
+
+// ─────────────────────────────────────────────
+// 顧客マスタ（clients）
+//  - name: 顧客名（表示名）
+//  - nameLower: 小文字化（検索・重複防止）
+//  - closeType: 'day' | 'eom'
+//  - closeDay: number|null（closeType==='day' のときのみ）
+//  - detailSchema: 将来拡張（ProjectDetail の顧客別追加項目など）
+// ─────────────────────────────────────────────
+function normalizeClientName(name) {
+  return String(name || '').trim().replace(/\s+/g, ' ');
+}
+
+export async function fetchClients() {
+  const qy = query(clientsCol, orderBy('name'));
+  const snaps = await getDocs(qy);
+  return snaps.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function setClient(clientId, data, actor = null) {
+  const normalized = normalizeClientName(data?.name);
+  if (!normalized) throw new Error('setClient: name is empty');
+
+  const payload = {
+    ...data,
+    name: normalized,
+    nameLower: normalized.toLowerCase(),
+    updatedAt: serverTimestamp(),
+    updatedBy: actor?.by ?? null,
+    updatedByName: actor?.byName ?? null,
+  };
+
+  if (!clientId) {
+    const ref = await addDoc(clientsCol, {
+      ...payload,
+      createdAt: serverTimestamp(),
+      createdBy: actor?.by ?? null,
+      createdByName: actor?.byName ?? null,
+    });
+    return ref.id;
+  }
+
+  await setDoc(doc(clientsCol, clientId), payload, { merge: true });
+  return clientId;
+}
+
+export async function deleteClient(clientId) {
+  if (!clientId) return;
+  await deleteDoc(doc(clientsCol, clientId));
+}
+
+// 指定名の顧客が無ければ作成して返す（既存ならそのまま返す）
+export async function ensureClientByName(name, closeCfg = null, actor = null) {
+  const normalized = normalizeClientName(name);
+  if (!normalized) return null;
+
+  const lower = normalized.toLowerCase();
+  const snaps = await getDocs(query(clientsCol, where('nameLower', '==', lower)));
+  if (!snaps.empty) {
+    const d = snaps.docs[0];
+    return { id: d.id, ...d.data(), existed: true };
+  }
+
+  const closeType = closeCfg?.closeType === 'eom' ? 'eom' : 'day';
+  const closeDay =
+    closeType === 'day' && Number.isFinite(Number(closeCfg?.closeDay))
+      ? Number(closeCfg.closeDay)
+      : null;
+
+  const ref = await addDoc(clientsCol, {
+    name: normalized,
+    nameLower: lower,
+    closeType,
+    closeDay,
+    detailSchema: closeCfg?.detailSchema ?? null,
+    createdAt: serverTimestamp(),
+    createdBy: actor?.by ?? null,
+    createdByName: actor?.byName ?? null,
+    updatedAt: serverTimestamp(),
+    updatedBy: actor?.by ?? null,
+    updatedByName: actor?.byName ?? null,
+  });
+
+  return {
+    id: ref.id,
+    name: normalized,
+    nameLower: lower,
+    closeType,
+    closeDay,
+    detailSchema: closeCfg?.detailSchema ?? null,
+    existed: false,
+  };
+}
+
 export async function fetchProjectById(projectId) {
   const docRef = doc(projectsCol, projectId);
   const snap = await getDoc(docRef);

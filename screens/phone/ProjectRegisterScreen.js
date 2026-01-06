@@ -32,6 +32,9 @@ import {
   // ▼ Txベースの一括保存API（Detail画面と統一）
   saveProjectVehiclePlan,
   saveProjectParticipantPlan,
+  // ▼ 顧客マスタ
+  fetchClients,
+  ensureClientByName,
 } from '../../firestoreService';
 import { Timestamp } from 'firebase/firestore';
 
@@ -230,6 +233,9 @@ export default function ProjectRegisterScreen({ route }) {
 
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
+  const [clients, setClients] = useState([]);
+  const [clientCloseType, setClientCloseType] = useState('day'); // 'day' | 'eom'
+  const [clientCloseDay, setClientCloseDay] = useState('25');
   const [startDate, setStartDate] = useState(() => roundToHour());
   const [endDate, setEndDate] = useState(() => roundToHour());
 
@@ -398,7 +404,50 @@ export default function ProjectRegisterScreen({ route }) {
       }
     })();
   }, []);
-    // ===== 車両関連 =====
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const cs = await fetchClients();
+        setClients(cs);
+      } catch (e) {
+        console.warn(e);
+      }
+    })();
+  }, []);
+
+  const normalizedClientName = useMemo(
+    () => String(clientName || '').trim().replace(/\s+/g, ' '),
+    [clientName]
+  );
+
+  const clientSuggestions = useMemo(() => {
+    const q = normalizedClientName.toLowerCase();
+    if (!q) return [];
+    return (clients || [])
+      .filter(c => String(c.nameLower || c.name || '').toLowerCase().includes(q))
+      .slice(0, 5);
+  }, [clients, normalizedClientName]);
+
+  const formatCloseLabel = useCallback((c) => {
+    if (!c) return '';
+    if (c.closeType === 'eom') return '末締め';
+    const d = Number(c.closeDay);
+    if (Number.isFinite(d) && d >= 1 && d <= 31) return `毎月${d}日`;
+    return '未設定';
+  }, []);
+
+  useEffect(() => {
+    const lower = normalizedClientName.toLowerCase();
+    if (!lower) return;
+    const hit = (clients || []).find(c => String(c.nameLower || c.name || '').toLowerCase() === lower);
+    if (!hit) return;
+    const ct = hit.closeType === 'eom' ? 'eom' : 'day';
+    setClientCloseType(ct);
+    if (ct === 'day') setClientCloseDay(hit.closeDay != null ? String(hit.closeDay) : '25');
+  }, [normalizedClientName, clients]);
+
+  // ===== 車両関連 =====
   const [vehicles, setVehicles] = useState([]);
   // { 'YYYY-MM-DD': { sales?: vehicleId, cargo?: vehicleId } }
   const [vehicleSelections, setVehicleSelections] = useState({});
@@ -1069,6 +1118,12 @@ useEffect(() => {
     if (!clientName.trim()) {
       return Alert.alert('入力エラー', '顧客名を入力してください');
     }
+    if (clientCloseType === 'day') {
+      const d = Number(clientCloseDay);
+      if (!Number.isInteger(d) || d < 1 || d > 31) {
+        return Alert.alert('入力エラー', '顧客の締め日は 1〜31 の数値で入力してください');
+      }
+    }
 
     // コスト計算用
     const participantObjs = employees.filter((e) =>
@@ -1269,6 +1324,18 @@ useEffect(() => {
         byName: me?.name ?? null,
       };
       const isEdit = !!editingProjectId;
+
+      // 顧客マスタを確実に作成（新規顧客の場合のみ）し、project に clientId を付与
+      try {
+        const ensured = await ensureClientByName(
+          clientName.trim(),
+          { closeType: clientCloseType === 'eom' ? 'eom' : 'day', closeDay: clientCloseType === 'day' ? Number(clientCloseDay) : null },
+          actor
+        );
+        if (ensured?.id) payload.clientId = ensured.id;
+      } catch (e) {
+        console.warn('[ensureClientByName] failed', e);
+      }
 
       // 2) プロジェクト本体を保存（新規 / 編集）
       const projectId = isEdit
@@ -1511,6 +1578,60 @@ useEffect(() => {
           onChangeText={setClientName}
           style={tw`border p-2 mb-2 rounded`}
         />
+
+        {clientSuggestions.length > 0 && normalizedClientName.length > 0 && (
+          <View style={tw`mb-2`}>
+            <Text style={tw`text-xs text-gray-600 mb-1`}>既存顧客候補（タップで反映）</Text>
+            {clientSuggestions.map((c) => (
+              <TouchableOpacity
+                key={c.id}
+                onPress={() => {
+                  setClientName(c.name || '');
+                  const ct = c.closeType === 'eom' ? 'eom' : 'day';
+                  setClientCloseType(ct);
+                  if (ct === 'day') setClientCloseDay(c.closeDay != null ? String(c.closeDay) : '25');
+                }}
+                activeOpacity={0.7}
+                style={tw`px-3 py-2 bg-gray-100 rounded mb-1`}
+              >
+                <Text>{c.name}（締め日: {formatCloseLabel(c)}）</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        <Text>顧客締め日（顧客情報）</Text>
+        <View style={tw`flex-row mb-2`}>
+          <TouchableOpacity
+            onPress={() => setClientCloseType('day')}
+            style={tw`${clientCloseType === 'day' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-4 py-2 mr-2`}
+            activeOpacity={0.7}
+          >
+            <Text>{clientCloseType === 'day' ? '● ' : '○ '}毎月◯日</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setClientCloseType('eom')}
+            style={tw`${clientCloseType === 'eom' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-4 py-2`}
+            activeOpacity={0.7}
+          >
+            <Text>{clientCloseType === 'eom' ? '● ' : '○ '}末締め</Text>
+          </TouchableOpacity>
+        </View>
+        {clientCloseType === 'day' && (
+          <View style={tw`flex-row items-center mb-2`}>
+            <TextInput
+              value={clientCloseDay}
+              onChangeText={setClientCloseDay}
+              keyboardType="numeric"
+              placeholder="25"
+              style={tw`border p-2 rounded w-24`}
+            />
+            <Text style={tw`ml-2`}>日</Text>
+          </View>
+        )}
+        <Text style={tw`text-xs text-gray-600 mb-3`}>
+          ※新規顧客として登録される場合のみ、ここで設定した締め日が「顧客情報」に保存されます。既存顧客の変更はプロフィール＞顧客情報から行ってください。
+        </Text>
 
         {/* 新規/既存 トグル */}
         <Text>案件区分</Text>
