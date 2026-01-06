@@ -234,8 +234,8 @@ export default function ProjectRegisterScreen({ route }) {
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
   const [clients, setClients] = useState([]);
-  const [clientCloseType, setClientCloseType] = useState('day'); // 'day' | 'eom'
-  const [clientCloseDay, setClientCloseDay] = useState('25');
+  const [selectedClientId, setSelectedClientId] = useState(null); // 既存顧客を選んだ場合のみセット
+  const [clientSearch, setClientSearch] = useState('');
   const [startDate, setStartDate] = useState(() => roundToHour());
   const [endDate, setEndDate] = useState(() => roundToHour());
 
@@ -416,36 +416,15 @@ export default function ProjectRegisterScreen({ route }) {
     })();
   }, []);
 
-  const normalizedClientName = useMemo(
-    () => String(clientName || '').trim().replace(/\s+/g, ' '),
-    [clientName]
-  );
 
   const clientSuggestions = useMemo(() => {
-    const q = normalizedClientName.toLowerCase();
+    const q = String(clientSearch || '').trim().toLowerCase();
     if (!q) return [];
     return (clients || [])
       .filter(c => String(c.nameLower || c.name || '').toLowerCase().includes(q))
       .slice(0, 5);
-  }, [clients, normalizedClientName]);
+  }, [clients, clientSearch]);
 
-  const formatCloseLabel = useCallback((c) => {
-    if (!c) return '';
-    if (c.closeType === 'eom') return '末締め';
-    const d = Number(c.closeDay);
-    if (Number.isFinite(d) && d >= 1 && d <= 31) return `毎月${d}日`;
-    return '未設定';
-  }, []);
-
-  useEffect(() => {
-    const lower = normalizedClientName.toLowerCase();
-    if (!lower) return;
-    const hit = (clients || []).find(c => String(c.nameLower || c.name || '').toLowerCase() === lower);
-    if (!hit) return;
-    const ct = hit.closeType === 'eom' ? 'eom' : 'day';
-    setClientCloseType(ct);
-    if (ct === 'day') setClientCloseDay(hit.closeDay != null ? String(hit.closeDay) : '25');
-  }, [normalizedClientName, clients]);
 
   // ===== 車両関連 =====
   const [vehicles, setVehicles] = useState([]);
@@ -1118,12 +1097,6 @@ useEffect(() => {
     if (!clientName.trim()) {
       return Alert.alert('入力エラー', '顧客名を入力してください');
     }
-    if (clientCloseType === 'day') {
-      const d = Number(clientCloseDay);
-      if (!Number.isInteger(d) || d < 1 || d > 31) {
-        return Alert.alert('入力エラー', '顧客の締め日は 1〜31 の数値で入力してください');
-      }
-    }
 
     // コスト計算用
     const participantObjs = employees.filter((e) =>
@@ -1325,16 +1298,16 @@ useEffect(() => {
       };
       const isEdit = !!editingProjectId;
 
-      // 顧客マスタを確実に作成（新規顧客の場合のみ）し、project に clientId を付与
-      try {
-        const ensured = await ensureClientByName(
-          clientName.trim(),
-          { closeType: clientCloseType === 'eom' ? 'eom' : 'day', closeDay: clientCloseType === 'day' ? Number(clientCloseDay) : null },
-          actor
-        );
-        if (ensured?.id) payload.clientId = ensured.id;
-      } catch (e) {
-        console.warn('[ensureClientByName] failed', e);
+      // 既存顧客を選択済みならそのIDを採用。未選択なら「締め日未設定」で顧客を作成する
+      if (selectedClientId) {
+        payload.clientId = selectedClientId;
+      } else {
+        try {
+          const ensured = await ensureClientByName(clientName.trim(), null, actor);
+          if (ensured?.id) payload.clientId = ensured.id;
+        } catch (e) {
+          console.warn('[ensureClientByName] failed', e);
+        }
       }
 
       // 2) プロジェクト本体を保存（新規 / 編集）
@@ -1439,6 +1412,8 @@ useEffect(() => {
         // 新規時：フォームクリア（従来動作を維持しつつ車両もクリア）
         setName('');
         setClientName('');
+        setClientSearch('');
+        setSelectedClientId(null);
         setStartDate(roundToHour(new Date()));
         setEndDate(roundToHour(new Date()));
         setParticipantSelectionsByDay({});
@@ -1572,68 +1547,7 @@ useEffect(() => {
           style={tw`border p-2 mb-2 rounded`}
         />
 
-        <Text>顧客名</Text>
-        <TextInput
-          value={clientName}
-          onChangeText={setClientName}
-          style={tw`border p-2 mb-2 rounded`}
-        />
-
-        {clientSuggestions.length > 0 && normalizedClientName.length > 0 && (
-          <View style={tw`mb-2`}>
-            <Text style={tw`text-xs text-gray-600 mb-1`}>既存顧客候補（タップで反映）</Text>
-            {clientSuggestions.map((c) => (
-              <TouchableOpacity
-                key={c.id}
-                onPress={() => {
-                  setClientName(c.name || '');
-                  const ct = c.closeType === 'eom' ? 'eom' : 'day';
-                  setClientCloseType(ct);
-                  if (ct === 'day') setClientCloseDay(c.closeDay != null ? String(c.closeDay) : '25');
-                }}
-                activeOpacity={0.7}
-                style={tw`px-3 py-2 bg-gray-100 rounded mb-1`}
-              >
-                <Text>{c.name}（締め日: {formatCloseLabel(c)}）</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        <Text>顧客締め日（顧客情報）</Text>
-        <View style={tw`flex-row mb-2`}>
-          <TouchableOpacity
-            onPress={() => setClientCloseType('day')}
-            style={tw`${clientCloseType === 'day' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-4 py-2 mr-2`}
-            activeOpacity={0.7}
-          >
-            <Text>{clientCloseType === 'day' ? '● ' : '○ '}毎月◯日</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => setClientCloseType('eom')}
-            style={tw`${clientCloseType === 'eom' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-4 py-2`}
-            activeOpacity={0.7}
-          >
-            <Text>{clientCloseType === 'eom' ? '● ' : '○ '}末締め</Text>
-          </TouchableOpacity>
-        </View>
-        {clientCloseType === 'day' && (
-          <View style={tw`flex-row items-center mb-2`}>
-            <TextInput
-              value={clientCloseDay}
-              onChangeText={setClientCloseDay}
-              keyboardType="numeric"
-              placeholder="25"
-              style={tw`border p-2 rounded w-24`}
-            />
-            <Text style={tw`ml-2`}>日</Text>
-          </View>
-        )}
-        <Text style={tw`text-xs text-gray-600 mb-3`}>
-          ※新規顧客として登録される場合のみ、ここで設定した締め日が「顧客情報」に保存されます。既存顧客の変更はプロフィール＞顧客情報から行ってください。
-        </Text>
-
-        {/* 新規/既存 トグル */}
+        {/* 新規/既存 トグル（プロジェクト名と顧客の間へ移動） */}
         <Text>案件区分</Text>
         <View style={tw`flex-row mb-2`}>
           <TouchableOpacity
@@ -1651,6 +1565,62 @@ useEffect(() => {
             <Text>{projectType === 'existing' ? '● ' : '○ '}既存</Text>
           </TouchableOpacity>
         </View>
+
+
+        <Text>顧客（既存顧客を検索して選択）</Text>
+        <TextInput
+          value={clientSearch}
+          onChangeText={(t) => {
+            setClientSearch(t);
+            // 手入力で検索を変えたら「既存選択状態」は解除（誤って別顧客名を保存しないため）
+            setSelectedClientId(null);
+          }}
+          placeholder="例：シャープライズ"
+          style={tw`border p-2 mb-2 rounded`}
+        />
+
+        {clientSuggestions.length > 0 && (
+          <View style={tw`mb-2`}>
+            {clientSuggestions.map((c) => (
+              <TouchableOpacity
+                key={c.id}
+                onPress={() => {
+                  setSelectedClientId(c.id);
+                  setClientName(c.name || '');
+                  setClientSearch(c.name || '');
+                }}
+                activeOpacity={0.7}
+                style={tw`px-3 py-2 bg-gray-100 rounded mb-1`}
+              >
+                <Text>{c.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        <Text>顧客名（新規顧客はここに入力）</Text>
+        <TextInput
+          value={clientName}
+          onChangeText={(t) => {
+            setClientName(t);
+            // 顧客名を触ったら「既存選択状態」は解除
+            setSelectedClientId(null);
+          }}
+          editable={!selectedClientId}
+          placeholder="例：新規の顧客名"
+          style={tw`border p-2 mb-2 rounded ${selectedClientId ? 'bg-gray-100' : ''}`}
+        />
+        {selectedClientId && (
+          <TouchableOpacity
+            onPress={() => {
+              setSelectedClientId(null);
+            }}
+            activeOpacity={0.7}
+            style={tw`self-start px-3 py-2 bg-gray-200 rounded mb-2`}
+          >
+            <Text>既存顧客の選択を解除</Text>
+          </TouchableOpacity>
+        )}
 
 
         {/* 金額・面積 */}

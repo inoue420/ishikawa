@@ -500,11 +500,14 @@ export async function ensureClientByName(name, closeCfg = null, actor = null) {
     return { id: d.id, ...d.data(), existed: true };
   }
 
-  const closeType = closeCfg?.closeType === 'eom' ? 'eom' : 'day';
-  const closeDay =
-    closeType === 'day' && Number.isFinite(Number(closeCfg?.closeDay))
-      ? Number(closeCfg.closeDay)
-      : null;
+  // closeCfg が無い（= ProjectRegisterから）場合は「未設定」で作成する
+  const rawType = closeCfg?.closeType;
+  const closeType = (rawType === 'day' || rawType === 'eom') ? rawType : null;
+  let closeDay = null;
+  if (closeType === 'day') {
+    const d = Number(closeCfg?.closeDay);
+    closeDay = Number.isInteger(d) && d >= 1 && d <= 31 ? d : null;
+  }
 
   const ref = await addDoc(clientsCol, {
     name: normalized,
