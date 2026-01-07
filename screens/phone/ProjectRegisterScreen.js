@@ -1116,12 +1116,18 @@ useEffect(() => {
     // ★案件区分に応じて「保存用の顧客名」を確定（既存=検索 or 選択 / 新規=入力）
     const clientNameForSave = (() => {
       if (projectType === 'existing') {
+        if (!selectedClientId) return '';
         const hit = (clients || []).find(c => c.id === selectedClientId);
-        return String(hit?.name || clientSearch || clientName || '').trim();
+        return String(hit?.name || '').trim();
       }
       return String(clientName || '').trim();
     })();
 
+    // ★既存顧客モードでは「候補から選択」が必須
+    if (projectType === 'existing' && !selectedClientId) {
+      return Alert.alert('入力エラー', '既存顧客の場合は、候補から顧客を選択してください');
+    }
+    
     if (!clientNameForSave) {
       return Alert.alert('入力エラー', '顧客名を入力してください');
     }
@@ -1193,35 +1199,53 @@ useEffect(() => {
     const finalName = `【${bracket}】${name.trim()}`;
 
     // 作業ステータス（工程）の保存用整形
-    // 各ステータスごとに employeeIds / vehicleIds / scheduleStatus が
-    // 未設定の場合だけ、ここで最低限の値を補完する
+    // ★保存時に「日別の参加者/車両プラン」から工程ごとの employeeIds / vehicleIds を自動生成し、
+    //   工程の表示（ProjectDetail）で空にならないようにする。
+    //   ※ユーザーが明示的に employeeIds/vehicleIds を入力済みならそれを優先。
     const workStatusesForSave =
       workStatuses.length > 0
         ? workStatuses.map((ws) => {
           const hasDates = !!(ws.startDate && ws.endDate);
 
-          // ✅ 「未確定(pending)」の工程を勝手に fixed にしない
-          // - 新規作成/未反映の工程は employeeIds/vehicleIds を空のまま保持して pending を維持
-          // - 旧データ救済：すでに fixed だったのに employeeIds/vehicleIds が空のケースだけ、
-          //   日別プラン（participants / vehicleIdsUnion）から補完する
+          // ✅ dateKeys は「現在の start/end から毎回生成」して保存（古い dateKeys が残る事故を防ぐ）
+          const dateKeys = hasDates ? eachDateKeyInclusive(ws.startDate, ws.endDate) : []; 
           const legacyFixed = ws?.scheduleStatus === 'fixed';
 
           const employeeIdsRaw = Array.isArray(ws.employeeIds) ? ws.employeeIds : [];
           const vehicleIdsRaw  = Array.isArray(ws.vehicleIds) ? ws.vehicleIds : [];
+          // 日別プランから、この工程がカバーする期間のユニオンを生成
+          const derivedEmpSet = new Set();
+          const derivedVehicleSet = new Set();
+
+          for (const dy of dateKeys) {
+            const empSel = participantSelectionsByDay?.[dy];
+            const empArr = Array.isArray(empSel) ? empSel : Array.from(empSel || []);
+            empArr.forEach((id) => derivedEmpSet.add(id));
+
+            const vSel = vehicleSelections?.[dy] || {};
+            if (vSel.sales) derivedVehicleSet.add(vSel.sales);
+            if (vSel.cargo) derivedVehicleSet.add(vSel.cargo);
+          }
+
+          const derivedEmployeeIds = Array.from(derivedEmpSet);
+          const derivedVehicleIds  = Array.from(derivedVehicleSet);
+
 
           const employeeIds =
-            employeeIdsRaw.length ? employeeIdsRaw : (legacyFixed ? participants : []);
+            employeeIdsRaw.length ? employeeIdsRaw :
+            derivedEmployeeIds.length ? derivedEmployeeIds :
+            (legacyFixed ? participants : []);
+
           const vehicleIds =
-            vehicleIdsRaw.length ? vehicleIdsRaw : (legacyFixed ? vehicleIdsUnion : []);
+            vehicleIdsRaw.length ? vehicleIdsRaw :
+            derivedVehicleIds.length ? derivedVehicleIds :
+            (legacyFixed ? vehicleIdsUnion : []);
 
           const hasEmployees = employeeIds.length > 0;
           const hasVehicles  = vehicleIds.length > 0;
 
           const scheduleStatus =
             hasDates && hasEmployees && hasVehicles ? 'fixed' : 'pending';
-
-          // ✅ dateKeys は「現在の start/end から毎回生成」して保存（古い dateKeys が残る事故を防ぐ）
-          const dateKeys = hasDates ? eachDateKeyInclusive(ws.startDate, ws.endDate) : [];
 
             return {
               ...ws,
@@ -1326,8 +1350,12 @@ useEffect(() => {
       };
       const isEdit = !!editingProjectId;
 
-      // 既存顧客を選択済みならそのIDを採用。未選択なら「締め日未設定」で顧客を作成する
-      if (selectedClientId) {
+      // ★顧客IDの確定
+      // - 既存顧客モード: 選択済みIDを必ず採用（未選択は上で弾く）
+      // - 新規顧客モード: 入力名から ensure（既存があれば紐付け / 無ければ作成）
+      if (projectType === 'existing') {
+        payload.clientId = selectedClientId;
+      } else if (selectedClientId) {
         payload.clientId = selectedClientId;
       } else {
         try {

@@ -59,6 +59,25 @@ const toDateMaybe = (v) => {
 
 
 const dateOnly = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+const toYmd = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+};
+
+// start〜end（ローカル日付）を YYYY-MM-DD で inclusive に列挙
+const eachDateKeyInclusive = (start, end) => {
+  if (!start || !end) return [];
+  const s = dateOnly(start);
+  const e = dateOnly(end);
+  const out = [];
+  for (let cur = new Date(s); cur.getTime() <= e.getTime(); cur.setDate(cur.getDate() + 1)) {
+    out.push(toYmd(cur));
+  }
+  return out;
+};
 // ── プロジェクトステータス（Register画面と同じ定義） ──
 const STATUS_OPTIONS = [
   { value: 'prospect',    label: '見込み' },
@@ -598,12 +617,45 @@ export default function ProjectDetailScreen({ route }) {
                     .map(ws => {
                       const start = ws.startDate;
                       const end = ws.endDate;
-                      const statusJa =
-                        ws.scheduleStatus === 'fixed' ? '確定' : '未設定';
-                      const empNames = (ws.employeeIds || [])
+                      // employeeIds / vehicleIds が空の旧データでも表示できるように、日別プランからフォールバック
+                      const dateKeys = (Array.isArray(ws.dateKeys) && ws.dateKeys.length)
+                        ? ws.dateKeys
+                        : (start && end ? eachDateKeyInclusive(start, end) : []);
+
+                      const derivedEmployeeIds = (() => {
+                        const raw = Array.isArray(ws.employeeIds) ? ws.employeeIds : [];
+                        if (raw.length) return raw;
+                        const plan = project?.participantPlan || {};
+                        const set = new Set();
+                        for (const dy of dateKeys) {
+                          (plan?.[dy] || []).forEach((id) => set.add(id));
+                        }
+                        return Array.from(set);
+                      })();
+
+                      const derivedVehicleIds = (() => {
+                        const raw = Array.isArray(ws.vehicleIds) ? ws.vehicleIds : [];
+                        if (raw.length) return raw;
+                        const plan = project?.vehiclePlan || {};
+                        const set = new Set();
+                        for (const dy of dateKeys) {
+                          const v = plan?.[dy];
+                          if (!v) continue;
+                          if (v.sales) set.add(v.sales);
+                          if (v.cargo) set.add(v.cargo);
+                        }
+                        return Array.from(set);
+                      })();
+
+                      const isFixedComputed =
+                        ws.scheduleStatus === 'fixed' ||
+                        (!!start && !!end && derivedEmployeeIds.length > 0 && derivedVehicleIds.length > 0);
+
+                      const statusJa = isFixedComputed ? '確定' : '未設定';
+                      const empNames = (derivedEmployeeIds || [])
                         .map(id => nameById[id])
                         .filter(Boolean);
-                      const vehicleNames = (ws.vehicleIds || [])
+                      const vehicleNames = (derivedVehicleIds || [])
                         .map(id => vehiclesById[id]?.name)
                         .filter(Boolean);
 
@@ -628,7 +680,7 @@ export default function ProjectDetailScreen({ route }) {
                             </Text>
                             <View
                               style={tw`px-2 py-1 rounded-full border ${
-                                ws.scheduleStatus === 'fixed'
+                                isFixedComputed
                                   ? 'bg-green-100 border-green-400'
                                   : 'bg-gray-100 border-gray-400'
                               }`}

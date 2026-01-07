@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   View, Text, TextInput,
-  ActivityIndicator, FlatList, TouchableOpacity
+  ActivityIndicator, FlatList, TouchableOpacity,
+  RefreshControl,
 } from 'react-native';
 import tw from 'twrnc';
 import {
@@ -27,45 +28,78 @@ export default function WIPScreen() {
   const [clients, setClients] = useState([]);
   const [clientQuery, setClientQuery] = useState('');
   const [closeFilter, setCloseFilter] = useState('all'); // 'all' | 'day' | 'eom'  
+  const [refreshing, setRefreshing] = useState(false);
   const navigation = useNavigation();
 
-  // ── ① 画面立ち上げ時に WIP 一覧を取得
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
+  // ── ① WIP 一覧を取得（初期表示 / Pull-to-refresh で共通）
+  const loadWip = useCallback(async ({ showLoading = true } = {}) => {
+    if (showLoading) setLoading(true);
+    try {
       try {
         const cs = await fetchClients();
         setClients(cs);
       } catch (e) {
         console.warn(e);
+        setClients([]);
       }
       const all = await fetchProjects();
       const wip = [];
       const initialInputs = {};
+      const milestoneProjects = [];
       for (const p of all) {
         wip.push(p);
         // デフォルト請求金額（projectsコレクション内の値）を初期入力へ
         const defAmt = p?.invoiceAmount ?? p?.amount ?? p?.budget ?? '';
-        if (defAmt !== '') initialInputs[p.id] = String(defAmt);  
-        if (p.isMilestoneBilling) {
-          const bs = await fetchBillings(p.id);
-          // マイルストーン請求のデータを初期化
-          setBillingsMap(m => ({ ...m, [p.id]: bs }));
-          setBillingInputsMap(prev => ({
-            ...prev,
-            [p.id]: bs.reduce((acc, b) => ({
-              ...acc,
-              [b.id]: b.amount?.toString() || ''
-            }), {})
-          }));
-        }
+        if (defAmt !== '') initialInputs[p.id] = String(defAmt);
+        if (p.isMilestoneBilling) milestoneProjects.push(p);
       }
-      wip.sort((a, b) => a.endDate.toDate() - b.endDate.toDate());
+
+      const nextBillingsMap = {};
+      const nextBillingInputsMap = {};
+      await Promise.all(
+        milestoneProjects.map(async (proj) => {
+          try {
+            const bs = await fetchBillings(proj.id);
+            nextBillingsMap[proj.id] = bs;
+            nextBillingInputsMap[proj.id] = bs.reduce((acc, b) => {
+              acc[b.id] = b.amount?.toString() || '';
+              return acc;
+            }, {});
+          } catch (e) {
+            console.warn(e);
+            nextBillingsMap[proj.id] = [];
+            nextBillingInputsMap[proj.id] = {};
+          }
+        })
+      );
+
+      wip.sort((a, b) => {
+        const ad = a?.endDate?.toDate ? a.endDate.toDate() : new Date(0);
+        const bd = b?.endDate?.toDate ? b.endDate.toDate() : new Date(0);
+        return ad - bd;
+      });
+
       setProjects(wip);
       setInputs(initialInputs);
-      setLoading(false);
-    })();
+      setBillingsMap(nextBillingsMap);
+      setBillingInputsMap(nextBillingInputsMap);
+    } finally {
+      if (showLoading) setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    loadWip();
+  }, [loadWip]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadWip({ showLoading: false });
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadWip]);
 
   const pToDate = (v) => {
     if (!v) return null;
@@ -324,6 +358,9 @@ export default function WIPScreen() {
   return (
     <SafeAreaView edges={['top']} style={tw`flex-1`}>
       <FlatList
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
         data={filteredProjects}
         keyExtractor={p => p.id}
         contentContainerStyle={tw`p-4 bg-gray-100`}
