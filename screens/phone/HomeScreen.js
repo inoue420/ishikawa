@@ -86,30 +86,41 @@ export default function HomeScreen({ navigation, route }) {
   const dateOnly = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 
   // ★ 追加：選択日に該当する「工程(workStatus)」を1つ決める（タイトルと時刻で共通利用）
+  //  - workStatuses[].dateKeys があればそれも判定に使う（ScheduleScreen と揃える）
   const pickWorkStatusForDate = (proj, targetDate) => {
     const list = Array.isArray(proj?.workStatuses) ? proj.workStatuses : [];
     if (!list.length) return null;
     const t = dateOnly(targetDate).getTime();
+    const targetKey = dateKey(targetDate);
 
     const matches = list
       .map((ws) => {
         const s = asDate(ws?.startDate);
         const e = asDate(ws?.endDate);
-        return { ...ws, _s: s, _e: e };
+        const byKey =
+          Array.isArray(ws?.dateKeys) &&
+          ws.dateKeys.map(String).includes(String(targetKey));
+        return { ...ws, _s: s, _e: e, _byKey: byKey };
       })
-      .filter((ws) => ws._s && ws._e)
       .filter((ws) => {
-        const s = dateOnly(ws._s).getTime();
-        const e = dateOnly(ws._e).getTime();
-        return s <= t && t <= e;
+        // dateKeys があればそれを最優先
+        if (ws._byKey) return true;
+        // 無ければ start/end の範囲一致で判定
+        if (ws._s && ws._e) {
+          const s = dateOnly(ws._s).getTime();
+          const e = dateOnly(ws._e).getTime();
+          return s <= t && t <= e;
+        }
+        return false;
       })
       // PDSと同じ優先度に寄せる：確定→開始が早い→type
       .sort((a, b) => {
         const af = a.scheduleStatus === 'fixed' ? 0 : 1;
         const bf = b.scheduleStatus === 'fixed' ? 0 : 1;
         if (af !== bf) return af - bf;
-        const as = a._s ? a._s.getTime() : 0;
-        const bs = b._s ? b._s.getTime() : 0;
+        // startDate が無い（dateKeysのみ）ケースは「選択日」を基準に安定ソート
+        const as = a._s ? a._s.getTime() : t;
+        const bs = b._s ? b._s.getTime() : t;
         if (as !== bs) return as - bs;
         return String(a.type).localeCompare(String(b.type));
       });
@@ -174,7 +185,15 @@ export default function HomeScreen({ navigation, route }) {
         const dB = asDate(b.startDate) || asDate(b.start) || asDate(b.startAt) || 0;
         return (dA ? dA.getTime() : 0) - (dB ? dB.getTime() : 0);
       });
-      setProjects(sorted);
+
+      // ★ workStatuses を持つプロジェクトは「選択日が稼働日」のときだけ Home に表示
+      //    （組立/解体などの“飛び日”の中間期間は表示しない）
+      const filtered = sorted.filter((p) => {
+        const wss = Array.isArray(p?.workStatuses) ? p.workStatuses : [];
+        if (!wss.length) return true; // workStatuses無しは従来通り
+        return !!pickWorkStatusForDate(p, selectedDate);
+      });
+      setProjects(filtered);
 
       // 従業員名マップ
       const idFields = ['management', 'sales', 'design', 'survey'];
