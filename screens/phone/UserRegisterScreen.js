@@ -1,6 +1,6 @@
 // screens/phone/UserRegisterScreen.js
-import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, TextInput, Button, Alert, ScrollView, StyleSheet } from 'react-native';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { View, Text, TextInput, Alert, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import {
   registerUser,
@@ -9,6 +9,7 @@ import {
   updateUser,
   deleteUser,
 } from '../../firestoreService';
+import { fetchBillingApproverConfig, setBillingApproverConfig } from '../../billingApprovalService';
 
 const DIVISION_OPTIONS = ['外注', '社員', 'パート', 'アルバイト'];
 const DEPT_OPTIONS = ['イベント事業', '飲食事業', 'ライフサポート事業', '安全管理', 'ASHIBAのコンビニ事業', 'office', 'サービス', '仮設・足場事業', '役員' ]; // ★ 追加：事業部
@@ -61,7 +62,31 @@ export default function UserRegisterScreen() {
   const [loading, setLoading] = useState(false);
   const [editingEmail, setEditingEmail] = useState(null);
   const [editingDocId, setEditingDocId] = useState(null); // ★ 追加：実ドキュメントID
+  // 請求書承認者（emailで複数名AND）
+  const [approverEmails, setApproverEmails] = useState([]); // string[]
+  const [approverLoading, setApproverLoading] = useState(true);
+  const [approverSaving, setApproverSaving] = useState(false);
 
+  const normEmail = (v = '') => (v || '').trim().toLowerCase();
+
+  const cancelEdit = () => {
+    setEditingEmail(null);
+    setEditingDocId(null);
+    setEmail('');
+    setLoginId('');
+    setName('');
+    setAffiliation('');
+    setDivision('');
+    setRole('employee');
+    setDepartment('');
+    setManagerLoginId('');
+  };
+
+  const isInvoiceApprover = useCallback((addr) => {
+    const e = normEmail(addr);
+    return !!e && (approverEmails || []).includes(e);
+  }, [approverEmails]);
+  
   const loadUsers = async () => {
     try {
       const list = await fetchAllUsers();
@@ -73,6 +98,62 @@ export default function UserRegisterScreen() {
   };
 
   useEffect(() => { loadUsers(); }, []);
+
+  // 請求承認者設定を読み込み
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        setApproverLoading(true);
+        const cfg = await fetchBillingApproverConfig();
+        if (!alive) return;
+        // cfg.approverEmails を優先。無い場合は旧フィールドから補完（後方互換）
+        const list = Array.isArray(cfg?.approverEmails) ? cfg.approverEmails : [];
+        const fallback = [cfg?.presidentEmail, cfg?.directorEmail].filter(Boolean);
+        const merged = [...new Set([...list, ...fallback].map(normEmail).filter(Boolean))];
+        setApproverEmails(merged);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        if (alive) setApproverLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // （編集時のみ）部長以上なら「請求書承認者に設定/解除」ボタンを表示
+  const canShowApproverToggle = useMemo(() => {
+    return !!editingEmail && (role === 'manager' || role === 'executive');
+  }, [editingEmail, role]);
+
+  const toggleApproverForEditingUser = async () => {
+    try {
+      if (!editingEmail) return;
+      const targetEmail = normEmail(email);
+      if (!targetEmail) return;
+
+      // 念のため：対象ユーザーが部長/役員か確認
+      const targetUser = (users || []).find(u => normEmail(u.email) === targetEmail);
+      if (!targetUser || !(targetUser.role === 'manager' || targetUser.role === 'executive')) {
+        Alert.alert('入力エラー', '請求書承認者に設定できるのは「部長」または「役員」のみです');
+        return;
+      }
+
+      const current = (approverEmails || []).map(normEmail).filter(Boolean);
+      const next = current.includes(targetEmail)
+        ? current.filter(e => e !== targetEmail)
+        : [...current, targetEmail];
+
+      setApproverSaving(true);
+      await setBillingApproverConfig({ approverEmails: next });
+      setApproverEmails(next);
+    } catch (e) {
+      console.error(e);
+      Alert.alert('保存エラー', '請求書承認者の設定に失敗しました');
+    } finally {
+      setApproverSaving(false);
+    }
+  };
 
   // 上長候補（従業員→部長、部長→役員）
   // 部長不在部門のみ 役員承認を許可
@@ -322,7 +403,7 @@ export default function UserRegisterScreen() {
               <Picker.Item label="選択してください" value="" />
               {candidateSuperiors.map(m => (
                 <Picker.Item
-                  key={(m.loginId || m.email) ?? Math.random().toString(36)}
+                  key={(m.id || m.email || m.loginId)}
                   label={`${m.name ?? m.loginId ?? m.email}（${roleLabel(m.role)}${m.affiliation ? ` / ${m.affiliation}` : ''}）`}
                   value={m.loginId ?? ''}
                 />
@@ -332,20 +413,38 @@ export default function UserRegisterScreen() {
         </>
       )}
 
-      <Button
-        title={loading ? (editingEmail ? '更新中…' : '登録中…') : (editingEmail ? '更新' : '登録')}
+      <TouchableOpacity
         onPress={handleSubmit}
+        activeOpacity={0.8}
         disabled={loading}
-      />
+        style={[styles.primaryButton, loading && styles.buttonDisabled]}
+      >
+        <Text style={styles.primaryButtonText}>
+          {loading ? (editingEmail ? '更新中…' : '登録中…') : (editingEmail ? '更新' : '登録')}
+        </Text>
+      </TouchableOpacity>
 
       {editingEmail && (
         <View style={styles.cancelButton}>
-          <Button title="キャンセル" onPress={() => {
-            setEditingEmail(null);
-            setEditingDocId(null);      // ★ クリア
-            setEmail(''); setLoginId(''); setName(''); setAffiliation(''); setDivision('');
-            setRole('employee'); setDepartment(''); setManagerLoginId('');
-          }} />
+          <TouchableOpacity onPress={cancelEdit} activeOpacity={0.8} style={styles.cancelButtonInner}>
+            <Text style={styles.cancelButtonText}>キャンセル</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* 請求書承認者：部長以上の編集中ユーザーのみ */}
+      {canShowApproverToggle && (
+        <View style={{ marginBottom: 12 }}>
+          <TouchableOpacity
+            onPress={toggleApproverForEditingUser}
+            activeOpacity={0.8}
+            disabled={approverLoading || approverSaving}
+            style={[styles.smallButton, (approverLoading || approverSaving) && styles.buttonDisabled]}
+          >
+            <Text style={styles.smallButtonText}>
+              {isInvoiceApprover(email) ? '請求書承認者に設定しない' : '請求書承認者に設定する'}
+            </Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -364,11 +463,26 @@ export default function UserRegisterScreen() {
                 ? ` / 上長(loginId): ${u.managerLoginId ?? '-'}`
                 : ''}
             </Text>
+            {isInvoiceApprover(u.email) && (
+              <Text style={{ fontWeight: '700' }}>請求書承認者</Text>
+            )}
           </View>
           <View style={styles.buttonsRow}>
-            <Button title="編集" onPress={() => startEdit(u)} />
-            <View style={{ width: 8 }} />
-            <Button title="削除" color="red" onPress={() => handleDelete(u.email)} />
+            <TouchableOpacity
+              onPress={() => startEdit(u)}
+              activeOpacity={0.8}
+              style={styles.smallButton}
+            >
+              <Text style={styles.smallButtonText}>編集</Text>
+            </TouchableOpacity>
+             <View style={{ width: 8 }} />
+            <TouchableOpacity
+              onPress={() => handleDelete(u.email)}
+              activeOpacity={0.8}
+              style={[styles.smallButton, styles.dangerButton]}
+            >
+              <Text style={[styles.smallButtonText, styles.dangerButtonText]}>削除</Text>
+            </TouchableOpacity>
           </View>
         </View>
       ))}
@@ -389,4 +503,33 @@ const styles = StyleSheet.create({
   userRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   buttonsRow: { flexDirection: 'row' },
   cancelButton: { marginVertical: 8 },
+
+  primaryButton: {
+    marginTop: 8,
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: '#1f2937',
+    alignItems: 'center',
+  },
+  primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  buttonDisabled: { opacity: 0.6 },
+
+  cancelButtonInner: {
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#e5e7eb',
+    alignItems: 'center',
+  },
+  cancelButtonText: { fontSize: 14, fontWeight: '700' },
+
+  smallButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#e5e7eb',
+  },
+  smallButtonText: { fontWeight: '700' },
+  dangerButton: { backgroundColor: '#fee2e2' },
+  dangerButtonText: { color: '#b91c1c' },
+
 });
