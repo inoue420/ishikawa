@@ -3,6 +3,7 @@ import React from 'react';
 import { createStackNavigator } from '@react-navigation/stack';
 import WIPScreen from './WIPScreen';
 import InvoiceEditorScreen from './InvoiceEditorScreen';
+import InvoiceEditorShimizuScreen from './InvoiceEditorShimizuScreen';
 import PDFPreviewScreen from './PDFPreviewScreen';
 
 const Stack = createStackNavigator();
@@ -22,6 +23,11 @@ export default function WIPStackNavigator({ route }) {
         name="InvoiceEditor"
         component={InvoiceEditorScreen}
         options={{ title: '請求書' }}
+      />
+      <Stack.Screen
+        name="InvoiceEditorShimizu"
+        component={InvoiceEditorShimizuScreen}
+        options={{ title: '請求書（清水建設）' }}
       />
       <Stack.Screen
         name="PDFPreview"

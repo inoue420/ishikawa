@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
-  View, Text, TextInput, Button,
+  View, Text, TextInput,
   ActivityIndicator, FlatList, TouchableOpacity
 } from 'react-native';
 import tw from 'twrnc';
@@ -122,6 +122,59 @@ export default function WIPScreen() {
     });
   }, [projects, clients, clientsById, clientQuery, closeFilter]);
 
+  // ── 請求書エディタ：顧客テンプレに応じて遷移先を決める
+  const resolveInvoiceScreenName = (p) => {
+    const c = findClientForProject(p);
+    const templateId = String(c?.invoiceTemplateId || '').trim();
+
+    // 推奨：clients.invoiceTemplateId で分岐
+    if (templateId === 'shimizu') return 'InvoiceEditorShimizu';
+
+    // フォールバック：名前に「清水建設」を含む場合（暫定）
+    const name = String(c?.name || p?.clientName || '').replace(/\s/g, '');
+    if (name.includes('清水建設')) return 'InvoiceEditorShimizu';
+
+    return 'InvoiceEditor';
+  };
+
+  const toNumberSafe = (v) => {
+    if (v == null) return null;
+    const n = Number(String(v).replace(/,/g, '').trim());
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const getBaseAmountForProject = (p) => {
+    // 画面で入力した金額があれば優先、無ければプロジェクト情報
+    const typed = toNumberSafe(inputs[p.id]);
+    if (typed != null) return typed;
+    return (
+      toNumberSafe(p?.orderAmount) ??
+      toNumberSafe(p?.invoiceAmount) ??
+      toNumberSafe(p?.amount) ??
+      toNumberSafe(p?.budget) ??
+      0
+    );
+  };
+
+  const openInvoiceEditor = (p, opts = {}) => {
+    const screen = resolveInvoiceScreenName(p);
+    const baseAmount = getBaseAmountForProject(p);
+    const billingAmount =
+      (opts.billingAmount != null ? toNumberSafe(opts.billingAmount) : null) ??
+      baseAmount;
+
+    navigation.navigate(screen, {
+      projectId: p.id,
+      // InvoiceEditorScreen が参照するキー
+      stage: opts.stage ?? null,
+      billingAmount,
+      // 互換用（あなたの既存実装/他画面が参照していても壊れないように）
+      billingId: opts.billingId ?? null,
+      amount: billingAmount,
+      itemName: opts.itemName ?? (p.title || p.name || p.projectName || '工事費 一式'),
+    });
+  };
+  
   // ── ② 通常請求：請求書発行
   const onInvoice = async projId => {
     try {
@@ -339,11 +392,7 @@ export default function WIPScreen() {
               {/* 新規：エディタへ遷移して編集／CSV等へ */}
               <TouchableOpacity
                 style={tw`mt-2 px-4 py-2 bg-emerald-200 rounded self-start`}
-                onPress={() => navigation.navigate('InvoiceEditor', { 
-                  projectId: p.id,
-                  amount: Number(p.orderAmount ?? 0),
-                   itemName: (p.title || p.name || p.projectName || '工事費 一式')
-                 })}
+                onPress={() => openInvoiceEditor(p)}
                >
                 <Text>請求書編集へ</Text>
               </TouchableOpacity>
@@ -390,12 +439,16 @@ export default function WIPScreen() {
                   {/* 出来高ごとに請求書エディタへ */}
                   <TouchableOpacity
                     onPress={() =>
-                      navigation.navigate('InvoiceEditor', {
-                        projectId: p.id,
+                      openInvoiceEditor(p, {
                         billingId: b.id,
-                        amount: Number(b.amount ?? p.orderAmount ?? 0), // 出来高金額がなければ受注金額
-                        itemName: `${p.title || p.name || '工事'}／出来高 ${b.stage}`
-                       })}
+                        stage: b.stage,
+                        billingAmount:
+                          toNumberSafe(billingInputsMap[p.id]?.[b.id]) ??
+                          toNumberSafe(b.amount) ??
+                          getBaseAmountForProject(p),
+                        itemName: `${p.title || p.name || '工事'}／出来高 ${b.stage}`,
+                      })
+                    }
                     style={tw`mt-2 px-3 py-2 bg-emerald-200 rounded self-start`}
                   >
                     <Text>請求書編集へ</Text>
