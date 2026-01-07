@@ -5,6 +5,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import tw from 'twrnc';
 import { getAuth } from 'firebase/auth';
 import { findEmployeeByIdOrEmail, fetchClients, setClient, deleteClient } from '../../firestoreService';
+import {
+  TEMPLATE_DEFAULT,
+  TEMPLATE_SHIMIZU,
+  TEMPLATE_OPTIONS,
+} from '../../invoiceTemplates';
 
 const CLOSE_DAY = 'day';
 const CLOSE_EOM = 'eom';
@@ -26,8 +31,21 @@ export default function ClientInfoScreen() {
   const [name, setName] = useState('');
   const [closeType, setCloseType] = useState(CLOSE_DAY);
   const [closeDay, setCloseDay] = useState('25');
+  const [invoiceTemplateId, setInvoiceTemplateId] = useState(TEMPLATE_SHIMIZU);
   const [query, setQuery] = useState('');
 
+  // 現時点で「画面が存在する」テンプレのみ表示（標準 / 清水）
+  const invoiceTemplateOptions = useMemo(() => {
+    const ids = new Set([TEMPLATE_DEFAULT, TEMPLATE_SHIMIZU]);
+    return (TEMPLATE_OPTIONS || []).filter(o => ids.has(o.id));
+  }, []);
+
+  const templateLabelById = useMemo(() => {
+    const m = {};
+    for (const o of (TEMPLATE_OPTIONS || [])) m[o.id] = o.label;
+    return m;
+  }, []);
+  
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -63,6 +81,7 @@ export default function ClientInfoScreen() {
     setName('');
     setCloseType(CLOSE_DAY);
     setCloseDay('25');
+    setInvoiceTemplateId(TEMPLATE_SHIMIZU);
   }, []);
 
   const onPickEdit = useCallback((c) => {
@@ -70,6 +89,8 @@ export default function ClientInfoScreen() {
     setName(String(c.name || ''));
     setCloseType(c.closeType === CLOSE_EOM ? CLOSE_EOM : CLOSE_DAY);
     setCloseDay(c.closeType === CLOSE_EOM ? '25' : (c.closeDay != null ? String(c.closeDay) : '25'));
+    // 未設定は「清水建設」をデフォルトに（要望どおり）
+    setInvoiceTemplateId(String(c.invoiceTemplateId || TEMPLATE_SHIMIZU));
   }, []);
 
   const onSave = useCallback(async () => {
@@ -87,7 +108,12 @@ export default function ClientInfoScreen() {
     try {
       await setClient(
         editingId,
-        { name: n, closeType, closeDay: closeType === CLOSE_DAY ? dayNum : null },
+        {
+          name: n,
+          closeType,
+          closeDay: closeType === CLOSE_DAY ? dayNum : null,
+          invoiceTemplateId: String(invoiceTemplateId || TEMPLATE_SHIMIZU),
+        },
         { by: me?.id ?? null, byName: me?.name ?? null }
       );
       await reload();
@@ -97,7 +123,7 @@ export default function ClientInfoScreen() {
       console.error(e);
       Alert.alert('エラー', '顧客情報の保存に失敗しました');
     }
-  }, [name, closeType, closeDay, editingId, me, reload, resetForm]);
+  }, [name, closeType, closeDay, invoiceTemplateId, editingId, me, reload, resetForm]);
 
   const onDelete = useCallback((c) => {
     Alert.alert(
@@ -176,6 +202,23 @@ export default function ClientInfoScreen() {
             </View>
           )}
 
+          <Text style={tw`mb-1`}>請求書テンプレ</Text>
+          <View style={tw`flex-row flex-wrap mb-3`}>
+            {invoiceTemplateOptions.map(opt => {
+              const selected = invoiceTemplateId === opt.id;
+              return (
+                <TouchableOpacity
+                  key={opt.id}
+                  onPress={() => setInvoiceTemplateId(opt.id)}
+                  activeOpacity={0.7}
+                  style={tw`${selected ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-3 py-2 mr-2 mb-2`}
+                >
+                  <Text>{selected ? '● ' : '○ '}{opt.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
           <View style={tw`flex-row`}>
             <TouchableOpacity
               onPress={onSave}
@@ -211,6 +254,7 @@ export default function ClientInfoScreen() {
             <View key={c.id} style={tw`border border-gray-200 rounded p-3 mb-2`}>
               <Text style={tw`font-bold`}>{c.name}</Text>
               <Text style={tw`text-gray-700`}>締め日: {formatCloseLabel(c)}</Text>
+              <Text style={tw`text-gray-700`}>テンプレ: {templateLabelById[String(c.invoiceTemplateId || TEMPLATE_SHIMIZU)] || '清水建設'}</Text>
 
               <View style={tw`flex-row mt-2`}>
                 <TouchableOpacity
