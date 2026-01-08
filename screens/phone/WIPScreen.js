@@ -5,6 +5,7 @@ import {
   View, Text, TextInput,
   ActivityIndicator, FlatList, TouchableOpacity,
   RefreshControl,
+  ScrollView,
 } from 'react-native';
 import tw from 'twrnc';
 import {
@@ -39,6 +40,9 @@ export default function WIPScreen() {
   const [billingInputsMap, setBillingInputsMap] = useState({});
   const [clients, setClients] = useState([]);
   const [clientQuery, setClientQuery] = useState('');
+  const [selectedClientId, setSelectedClientId] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('all'); // 'all' | pending | approval_pending | returned | billable | issued | paid
+  const [filterJoin, setFilterJoin] = useState('and'); // 'and' | 'or'
   const [closeFilter, setCloseFilter] = useState('all'); // 'all' | 'day' | 'eom'  
   const [refreshing, setRefreshing] = useState(false);
   const navigation = useNavigation();
@@ -156,20 +160,90 @@ export default function WIPScreen() {
     return (clients || []).find(c => String(c.nameLower || c.name || '').toLowerCase() === lower) || null;
   };
 
+  // ── 追加：状態フィルタ対象（通常/出来高で統一）
+  const getStatusesForProject = (p) => {
+    if (!p) return ['pending'];
+    if (p.isMilestoneBilling) {
+      const bs = billingsMap[p.id] || [];
+      if (!bs.length) return ['pending'];
+      return bs.map((b) => b?.status || 'pending');
+    }
+    return [p?.invoiceStatus || 'pending'];
+  };
+
+  // ── 追加：顧客サジェスト候補（入力時のみ）
+  const clientSuggestions = useMemo(() => {
+    const q = String(clientQuery || '').trim().toLowerCase();
+    if (selectedClientId) return [];
+    if (!q) return [];
+    return (clients || [])
+      .filter((c) => String(c.nameLower || c.name || '').toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [clients, clientQuery, selectedClientId]);
+
+  const clearFilters = () => {
+    setClientQuery('');
+    setSelectedClientId(null);
+    setStatusFilter('all');
+    setCloseFilter('all');
+  };
+
   const filteredProjects = useMemo(() => {
     const q = String(clientQuery || '').trim().toLowerCase();
-    return (projects || []).filter(p => {
+
+    const clientActive = !!selectedClientId || !!q;
+    const statusActive = statusFilter !== 'all';
+
+    return (projects || []).filter((p) => {
+      // 既存：締め日フィルタ（常にANDで適用して現状挙動を維持）
       const c = findClientForProject(p);
-      const nameHit =
-        !q ||
-        String(p.clientName || '').toLowerCase().includes(q) ||
-        String(c?.name || '').toLowerCase().includes(q);
-      if (!nameHit) return false;
-      if (closeFilter === 'all') return true;
-      if (!c) return false;
-      return c.closeType === closeFilter;
+      if (closeFilter !== 'all') {
+        if (!c) return false;
+        if (c.closeType !== closeFilter) return false;
+      }
+
+      // 顧客条件
+      const clientHit = (() => {
+        if (selectedClientId) return c?.id === selectedClientId;
+        if (!q) return true;
+        return (
+          String(p.clientName || '').toLowerCase().includes(q) ||
+          String(c?.name || '').toLowerCase().includes(q)
+        );
+      })();
+
+      // 状態条件
+      const statusHit = (() => {
+        if (!statusActive) return true;
+        const sts = getStatusesForProject(p);
+        return sts.includes(statusFilter);
+      })();
+
+      // AND/OR 結合（状態 + 顧客）
+      if (!clientActive && !statusActive) return true;
+
+      if (filterJoin === 'or') {
+        if (!clientActive) return statusHit;
+        if (!statusActive) return clientHit;
+        return clientHit || statusHit;
+      }
+
+      // and
+      if (!clientActive) return statusHit;
+      if (!statusActive) return clientHit;
+      return clientHit && statusHit;
     });
-  }, [projects, clients, clientsById, clientQuery, closeFilter]);
+  }, [
+    projects,
+    clients,
+    clientsById,
+    billingsMap,
+    clientQuery,
+    selectedClientId,
+    closeFilter,
+    statusFilter,
+    filterJoin,
+  ]);
 
   // ── 請求書エディタ：顧客テンプレに応じて遷移先を決める
   const resolveInvoiceScreenName = (p) => {
@@ -467,29 +541,157 @@ export default function WIPScreen() {
         ListHeaderComponent={
           <View style={tw`mb-4`}>
             <Text style={tw`text-xl font-bold mb-2`}>WIP</Text>
-            <TextInput
-              style={tw`border p-2 rounded bg-white`}
-              placeholder="顧客名で検索"
-              value={clientQuery}
-              onChangeText={setClientQuery}
-            />
-            <View style={tw`flex-row mt-2`}>
-              <TouchableOpacity onPress={() => setCloseFilter('all')} activeOpacity={0.7}
-                style={tw`${closeFilter === 'all' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-3 py-2 mr-2`}>
-                <Text>{closeFilter === 'all' ? '● ' : '○ '}全て</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setCloseFilter('day')} activeOpacity={0.7}
-                style={tw`${closeFilter === 'day' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-3 py-2 mr-2`}>
-                <Text>{closeFilter === 'day' ? '● ' : '○ '}毎月◯日</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setCloseFilter('eom')} activeOpacity={0.7}
-                style={tw`${closeFilter === 'eom' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-3 py-2`}>
-                <Text>{closeFilter === 'eom' ? '● ' : '○ '}末締め</Text>
-              </TouchableOpacity>
+
+            {/* 追加：検索・フィルタ */}
+            <View style={tw`bg-white border border-gray-200 rounded-lg p-3`}>
+              <View style={tw`flex-row items-center justify-between mb-2`}>
+                <Text style={tw`font-bold`}>検索・フィルタ</Text>
+
+                <TouchableOpacity
+                  onPress={clearFilters}
+                  activeOpacity={0.7}
+                  style={tw`px-3 py-1 bg-gray-100 rounded`}
+                >
+                  <Text style={tw`text-gray-700`}>クリア</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* 締め日（顧客設定） */}
+              <View style={tw`mb-3`}>
+                <Text style={tw`text-xs text-gray-600 mb-1`}>締め日（顧客設定）</Text>
+
+                <View style={tw`flex-row`}>
+                  <TouchableOpacity
+                    onPress={() => setCloseFilter('all')}
+                    activeOpacity={0.7}
+                    style={tw`${closeFilter === 'all' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-3 py-2 mr-2`}
+                  >
+                    <Text>{closeFilter === 'all' ? '● ' : '○ '}全て</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={() => setCloseFilter('day')}
+                    activeOpacity={0.7}
+                    style={tw`${closeFilter === 'day' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-3 py-2 mr-2`}
+                  >
+                    <Text>{closeFilter === 'day' ? '● ' : '○ '}毎月◯日</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={() => setCloseFilter('eom')}
+                    activeOpacity={0.7}
+                    style={tw`${closeFilter === 'eom' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-3 py-2`}
+                  >
+                    <Text>{closeFilter === 'eom' ? '● ' : '○ '}末締め</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={tw`text-xs text-gray-500 mt-1`}>
+                  ※締め日が未登録の顧客は「毎月◯日/末締め」では絞り込めません。
+                </Text>
+              </View>
+
+              {/* AND / OR */}
+              <View style={tw`flex-row items-center mb-3`}>
+                <Text style={tw`text-xs text-gray-600 mr-2`}>条件の結合</Text>
+
+                <TouchableOpacity
+                  onPress={() => setFilterJoin('and')}
+                  activeOpacity={0.7}
+                  style={tw`${filterJoin === 'and' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-3 py-2 mr-2`}
+                >
+                  <Text>{filterJoin === 'and' ? '● ' : '○ '}AND</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => setFilterJoin('or')}
+                  activeOpacity={0.7}
+                  style={tw`${filterJoin === 'or' ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-3 py-2`}
+                >
+                  <Text>{filterJoin === 'or' ? '● ' : '○ '}OR</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* 状態 */}
+              <Text style={tw`text-xs text-gray-600 mb-1`}>状態</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={tw`mb-3`}>
+                {[
+                  { key: 'all', label: '全て' },
+                  { key: 'pending', label: '未請求' },
+                  { key: 'approval_pending', label: '承認待ち' },
+                  { key: 'returned', label: '差戻し' },
+                  { key: 'billable', label: '請求可能' },
+                  { key: 'issued', label: '請求中' },
+                  { key: 'paid', label: '入金済' },
+                ].map((opt) => (
+                  <TouchableOpacity
+                    key={opt.key}
+                    onPress={() => setStatusFilter(opt.key)}
+                    activeOpacity={0.7}
+                    style={tw`${statusFilter === opt.key ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-300'} border rounded px-3 py-2 mr-2`}
+                  >
+                    <Text>{statusFilter === opt.key ? '● ' : '○ '}{opt.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              {/* 顧客 */}
+              <Text style={tw`text-xs text-gray-600 mb-1`}>顧客</Text>
+              <TextInput
+                style={tw`border p-2 rounded bg-white`}
+                placeholder="顧客名を入力（候補から選択）"
+                value={clientQuery}
+                onChangeText={(t) => {
+                  setClientQuery(t);
+                  setSelectedClientId(null);
+                }}
+              />
+
+              {selectedClientId && (
+                <View style={tw`flex-row items-center mt-2`}>
+                  <Text style={tw`text-xs text-gray-600`}>選択中: </Text>
+                  <Text style={tw`text-xs font-bold`}>
+                    {clientsById[selectedClientId]?.name || clientQuery}
+                  </Text>
+
+                  <TouchableOpacity
+                    onPress={() => {
+                      setSelectedClientId(null);
+                      setClientQuery('');
+                    }}
+                    activeOpacity={0.7}
+                    style={tw`ml-3 px-3 py-1 bg-gray-100 rounded`}
+                  >
+                    <Text style={tw`text-xs text-gray-700`}>解除</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {!selectedClientId && String(clientQuery || '').trim() !== '' && (
+                <View style={tw`mt-2 border border-gray-200 rounded bg-gray-50 overflow-hidden`}>
+                  {clientSuggestions.length === 0 ? (
+                    <Text style={tw`px-3 py-2 text-gray-500`}>候補なし</Text>
+                  ) : (
+                    clientSuggestions.map((c, idx) => (
+                      <TouchableOpacity
+                        key={c.id}
+                        onPress={() => {
+                          setSelectedClientId(c.id);
+                          setClientQuery(c.name || '');
+                        }}
+                        activeOpacity={0.7}
+                        style={tw`px-3 py-2 ${idx !== clientSuggestions.length - 1 ? 'border-b border-gray-200' : ''}`}
+                      >
+                        <Text style={tw`text-gray-800`}>
+                          {c.name}
+                          {c.closeType ? `（締め: ${formatCloseLabel(c)}）` : ''}
+                        </Text>
+                      </TouchableOpacity>
+                    ))
+                  )}
+                </View>
+              )}
             </View>
-            <Text style={tw`text-xs text-gray-600 mt-2`}>
-              ※締め日が未登録の顧客は「毎月◯日/末締め」では絞り込めません。
-            </Text>
           </View>
         }
         renderItem={({ item: p }) => {
