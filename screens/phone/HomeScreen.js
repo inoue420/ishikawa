@@ -16,6 +16,9 @@ export default function HomeScreen({ navigation, route }) {
   const [projects, setProjects] = useState([]);
   const [showPicker, setShowPicker] = useState(false);
   const userEmail = route?.params?.userEmail ?? null;
+  // ★ 追加：loginId も引き回し（親から渡ってくる前提。無ければ me から補完）
+  const passedLoginId = route?.params?.loginId ?? route?.params?.userLoginId ?? null;
+  const userKeyForMe = userEmail ?? passedLoginId ?? null; // email or loginId
   const [me, setMe] = useState(null);
 
   // 追加: 従業員マップ（id/loginId/email → name）
@@ -29,12 +32,12 @@ export default function HomeScreen({ navigation, route }) {
   useEffect(() => {
     let mounted = true;
     (async () => {
-      if (!userEmail) return;
-      const emp = await findEmployeeByIdOrEmail(userEmail); // email or loginId どちらでも可
+      if (!userKeyForMe) return;
+      const emp = await findEmployeeByIdOrEmail(userKeyForMe); // email or loginId どちらでも可
       if (mounted) setMe(emp);
     })();
     return () => { mounted = false; };
-  }, [userEmail]);
+  }, [userKeyForMe]);
 
   // util
   const dateKey = d => {
@@ -298,7 +301,9 @@ export default function HomeScreen({ navigation, route }) {
                   navigation.navigate('ProjectDetail', {
                     projectId: proj.id,
                     date: dateKey(selectedDate),
-                    userEmail, // ★ ついでに渡しておくとPDS側の投稿者解決が安定
+                    userEmail, // ★ 後方互換
+                    // ★ 追加：WIP/承認系で使う想定（無ければ me から補完）
+                    loginId: passedLoginId ?? me?.loginId ?? null,
                   });
                 }}
                 activeOpacity={0.75}

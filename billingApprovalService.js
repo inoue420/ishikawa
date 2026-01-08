@@ -26,6 +26,8 @@ const targetKeyOf = ({ projectId, billingId }) =>
   `${projectId}::${billingId ? `billing:${billingId}` : 'project'}`;
 
 const normEmail = (v = '') => (v || '').trim().toLowerCase();
+const uniqEmails = (arr = []) => [...new Set((arr || []).map(normEmail).filter(Boolean))];
+
 
 /**
  * 承認者設定を取得（email固定・AND想定）
@@ -40,7 +42,7 @@ export async function fetchBillingApproverConfig() {
   const directorEmail = d.directorEmail ?? null;
   const list = Array.isArray(d.approverEmails) ? d.approverEmails : [];
   const fallback = [presidentEmail, directorEmail].filter(Boolean);
-  const merged = [...new Set([...list, ...fallback].map(normEmail).filter(Boolean))];
+  const merged = uniqEmails([...list, ...fallback]);
   return { presidentEmail, directorEmail, approverEmails: merged };
 }
 
@@ -60,7 +62,7 @@ export async function setBillingApproverConfig({ approverEmails, presidentEmail,
   }
 
   // 正規化 + 重複排除
-  list = [...new Set((list || []).map(normEmail).filter(Boolean))];
+  list = uniqEmails(list);
 
   // 0人は保存自体は許容（運用上、全員解除する可能性もあるため）
   if (list.length > 50) throw new Error('approverEmails is too long (max 50)');
@@ -128,7 +130,7 @@ export async function submitInvoiceApprovalRequest({
     const cfg = await fetchBillingApproverConfig();
     resolved = cfg.approverEmails;
   }
-  resolved = [...new Set((resolved || []).map(normEmail).filter(Boolean))];
+  resolved = uniqEmails(resolved);
   if (resolved.length < 1) throw new Error('approverEmails must have at least 1 email');
   if (resolved.length > 50) throw new Error('approverEmails is too long (max 50)');
 
@@ -187,7 +189,8 @@ export async function submitInvoiceApprovalRequest({
 }
 
 export async function fetchPendingInvoiceApprovals(approverLoginId, { limit = 30 } = {}) {
-  const email = (approverLoginId || '').trim().toLowerCase();
+  // 互換：引数名は approverLoginId だが、実態は email を受ける想定
+  const email = normEmail(approverLoginId);
   if (!email) return [];
   const q = query(
     collection(db, COL),
@@ -203,7 +206,7 @@ export async function fetchPendingInvoiceApprovals(approverLoginId, { limit = 30
 /**
  * 承認処理：ターゲットを billable に
  */
-export async function approveInvoiceApprovalRequest(approvalId, { approverLoginId } = {}) {
+export async function approveInvoiceApprovalRequest(approvalId, { approverEmail, approverLoginId } = {}) {
   if (!approvalId) throw new Error('approvalId is required');
   const ref = doc(db, COL, approvalId);
   const snap = await getDoc(ref);
@@ -214,19 +217,20 @@ export async function approveInvoiceApprovalRequest(approvalId, { approverLoginI
     return { ok: true, skipped: true, reason: 'not pending' };
   }
 
+  const approver = normEmail(approverEmail) || normEmail(approverLoginId) || null;
   await updateDoc(ref, {
     status: 'approved',
     approvedAt: serverTimestamp(),
-    approvedBy: approverLoginId ?? null,
+    approvedBy: approver,
   });
 
   // round全体が揃ったら billable
   const q = query(collection(db, COL), where('targetKey', '==', data.targetKey), where('roundId', '==', data.roundId), qLimit(200));
   const rs = await getDocs(q);
   const all = rs.docs.map(d => ({ id: d.id, ...d.data() }));
-  const required = Array.isArray(data.approverEmails) ? data.approverEmails : [];
-  const byApprover = new Map(all.map(x => [x.approverEmail, x.status]));
-  const allApproved = required.length >= 1 && required.every(em => byApprover.get(em) === 'approved');
+  const required = uniqEmails(Array.isArray(data.approverEmails) ? data.approverEmails : []);
+  const byApprover = new Map(all.map(x => [normEmail(x.approverEmail), x.status]));
+  const allApproved = required.length >= 1 && required.every(em => byApprover.get(normEmail(em)) === 'approved');
   if (!allApproved) return { ok: true, waiting: true };
 
   const projectId = data.projectId;
@@ -256,10 +260,11 @@ export async function rejectInvoiceApprovalRequest(approvalId, { approverEmail, 
   if (data.status !== 'pending') return { ok: true, skipped: true };
 
   const note = (comment || '').trim();
+  const by = normEmail(approverEmail) || null;
   await updateDoc(ref, {
     status: 'rejected',
     rejectedAt: serverTimestamp(),
-    rejectedBy: approverEmail ?? null,
+    rejectedBy: by,
     returnComment: note || null,
   });
 
@@ -268,7 +273,7 @@ export async function rejectInvoiceApprovalRequest(approvalId, { approverEmail, 
   const rs = await getDocs(q);
   for (const d of rs.docs) {
     if (d.id === approvalId) continue;
-    await updateDoc(doc(db, COL, d.id), { status: 'canceled', canceledAt: serverTimestamp(), canceledBy: approverEmail ?? null });
+    await updateDoc(doc(db, COL, d.id), { status: 'canceled', canceledAt: serverTimestamp(), canceledBy: by });
   }
 
   // ターゲット更新
@@ -286,4 +291,16 @@ export async function rejectInvoiceApprovalRequest(approvalId, { approverEmail, 
     });
   }
   return { ok: true, returned: true };
+}
+
+// 表示用（WIP/承認画面で共通利用可）
+export function formatApprovalStatus(s) {
+  return (
+    {
+      pending: '承認待ち',
+      approved: '承認済',
+      rejected: '差戻し',
+      canceled: '取消',
+    }[s] || s
+  );
 }

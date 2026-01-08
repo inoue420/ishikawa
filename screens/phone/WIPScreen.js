@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   View, Text, TextInput,
@@ -19,6 +19,18 @@ import {
   fetchClients,
 } from '../../firestoreService';
 
+import { submitInvoiceApprovalRequest } from '../../billingApprovalService';
+
+const statusLabel = (s) =>
+  ({
+    pending: '未請求',
+    approval_pending: '承認待ち',
+    returned: '差戻し',
+    billable: '請求可能',
+    issued: '請求中',
+    paid: '入金済',
+  }[s] || s || '未請求');
+
 export default function WIPScreen() {
   const [loading, setLoading]   = useState(true);
   const [projects, setProjects] = useState([]);
@@ -30,6 +42,9 @@ export default function WIPScreen() {
   const [closeFilter, setCloseFilter] = useState('all'); // 'all' | 'day' | 'eom'  
   const [refreshing, setRefreshing] = useState(false);
   const navigation = useNavigation();
+  const route = useRoute();
+  const userEmail = String(route?.params?.userEmail || '').trim().toLowerCase();
+  const userLoginId = String(route?.params?.loginId || route?.params?.userLoginId || '').trim().toLowerCase();
 
   // ── ① WIP 一覧を取得（初期表示 / Pull-to-refresh で共通）
   const loadWip = useCallback(async ({ showLoading = true } = {}) => {
@@ -171,6 +186,11 @@ export default function WIPScreen() {
     return 'InvoiceEditor';
   };
 
+  const resolveTemplateId = (p) => {
+    const screen = resolveInvoiceScreenName(p);
+    return screen === 'InvoiceEditorShimizu' ? 'shimizu' : 'standard';
+  };
+
   const toNumberSafe = (v) => {
     if (v == null) return null;
     const n = Number(String(v).replace(/,/g, '').trim());
@@ -208,10 +228,79 @@ export default function WIPScreen() {
       itemName: opts.itemName ?? (p.title || p.name || p.projectName || '工事費 一式'),
     });
   };
+
+  // ── 承認依頼（通常）
+  const requestApprovalProject = async (p) => {
+    try {
+      const st = p?.invoiceStatus || 'pending';
+      if (!['pending', 'returned'].includes(st)) {
+        alert(`この状態では申請できません（現在: ${statusLabel(st)}）`);
+        return;
+      }
+      const amountExTax = getBaseAmountForProject(p);
+      if (!amountExTax) return alert('金額を入力してください');
+      if (!userEmail && !userLoginId) return alert('申請者情報が取得できません（userEmail/loginId）');
+
+      await submitInvoiceApprovalRequest({
+        projectId: p.id,
+        templateId: resolveTemplateId(p),
+        amountExTax,
+        totalWithTax: Math.round(amountExTax * 1.1),
+        projectName: p.name ?? null,
+        clientName: p.clientName ?? null,
+        requesterEmail: userEmail || null,
+        requesterLoginId: userLoginId || null,
+      });
+      await loadWip({ showLoading: false });
+      alert('承認依頼を送信しました');
+    } catch (e) {
+      console.error(e);
+      alert(e?.message || '承認依頼に失敗しました');
+    }
+  };
+
+  // ── 承認依頼（出来高）
+  const requestApprovalBilling = async (p, b) => {
+    try {
+      const st = b?.status || 'pending';
+      if (!['pending', 'returned'].includes(st)) {
+        alert(`この状態では申請できません（現在: ${statusLabel(st)}）`);
+        return;
+      }
+      const typed = toNumberSafe(billingInputsMap[p.id]?.[b.id]);
+      const amountExTax = typed != null ? typed : toNumberSafe(b.amount) ?? 0;
+      if (!amountExTax) return alert('金額を入力してください');
+      if (!userEmail && !userLoginId) return alert('申請者情報が取得できません（userEmail/loginId）');
+
+      await submitInvoiceApprovalRequest({
+        projectId: p.id,
+        billingId: b.id,
+        stage: b.stage ?? null,
+        templateId: resolveTemplateId(p),
+        amountExTax,
+        totalWithTax: Math.round(amountExTax * 1.1),
+        projectName: p.name ?? null,
+        clientName: p.clientName ?? null,
+        requesterEmail: userEmail || null,
+        requesterLoginId: userLoginId || null,
+      });
+      await loadWip({ showLoading: false });
+      alert('承認依頼を送信しました');
+    } catch (e) {
+      console.error(e);
+      alert(e?.message || '承認依頼に失敗しました');
+    }
+  };
   
   // ── ② 通常請求：請求書発行
   const onInvoice = async projId => {
     try {
+      const p = projects.find(x => x.id === projId);
+      const st = p?.invoiceStatus || 'pending';
+      if (st !== 'billable') {
+        alert(`承認後のみ発行できます（現在: ${statusLabel(st)}）`);
+        return;
+      }
       const amt = Number(inputs[projId] || 0);
       if (!amt) return alert('金額を入力してください');
       await updateProjectInvoice(projId, { amount: amt, newStatus: 'issued' });
@@ -231,6 +320,12 @@ export default function WIPScreen() {
   // ── ③ 通常請求：入金確認
   const onPaid = async projId => {
     try {
+      const p = projects.find(x => x.id === projId);
+      const st = p?.invoiceStatus || 'pending';
+      if (st !== 'issued') {
+        alert(`請求中のみ入金にできます（現在: ${statusLabel(st)}）`);
+        return;
+      }
       const amt = Number(inputs[projId] || 0);
       await updateProjectInvoice(projId, { amount: amt, newStatus: 'paid' });
       setProjects(ps => ps.filter(p => p.id !== projId));
@@ -280,13 +375,18 @@ export default function WIPScreen() {
   // ── ⑤ マイル請求：請求／入金
   const onBillingAction = async (projId, bill) => {
     try {
-      let next = 'paid';
+      // billable → issued, issued → paid のみ許可（pending/returned は承認依頼へ）
+      let next = null;
       let newAmount = null;
-      if (bill.status === 'pending') {
-        // 入力中の金額を保存して 'issued' へ
+      if (bill.status === 'billable') {
         newAmount = Number(billingInputsMap[projId]?.[bill.id] || 0);
+        if (!newAmount) return alert('金額を入力してください');
         await updateBillingAmount(projId, bill.id, newAmount);
         next = 'issued';
+      } else if (bill.status === 'issued') {
+        next = 'paid';
+      } else {
+        return alert(`この状態では実行できません（現在: ${statusLabel(bill.status)}）`);
       }
       await updateBillingStatus(projId, bill.id, next);
       setBillingsMap((m) => {
@@ -394,6 +494,7 @@ export default function WIPScreen() {
         }
         renderItem={({ item: p }) => {
           const c = findClientForProject(p);
+          const invStatus = p?.invoiceStatus || 'pending';
           return (
         <View style={tw`mb-4 bg-white p-4 rounded-lg shadow`}>
           <Text style={tw`text-lg font-bold mb-1`}>{p.name}</Text>
@@ -412,6 +513,10 @@ export default function WIPScreen() {
 
           {!p.isMilestoneBilling ? (
             <>
+              <Text style={tw`mt-2 text-gray-700`}>状態: {statusLabel(invStatus)}</Text>
+              {invStatus === 'returned' && !!p.invoiceReturnComment && (
+                <Text style={tw`mt-1 text-red-600`}>差戻し: {p.invoiceReturnComment}</Text>
+              )}
               <TextInput
                 style={tw`border p-2 my-2`}
                 placeholder="請求金額を入力"
@@ -419,13 +524,29 @@ export default function WIPScreen() {
                 value={inputs[p.id]?.toString() || ''}
                 onChangeText={v => setInputs(i => ({ ...i, [p.id]: v }))}
               />
-              {/* 即時発行（従来動作を維持） */}
-              <TouchableOpacity
-                onPress={() => onInvoice(p.id)}
-                style={tw`mt-1 px-4 py-2 bg-indigo-200 rounded self-start`}
-              >
-                <Text>請求書発行（即時）</Text>
-              </TouchableOpacity>
+
+              {/* 承認フロー */}
+              {(invStatus === 'pending' || invStatus === 'returned') && (
+                <TouchableOpacity
+                  onPress={() => requestApprovalProject(p)}
+                  style={tw`mt-1 px-4 py-2 bg-indigo-200 rounded self-start`}
+                >
+                  <Text>承認依頼</Text>
+                </TouchableOpacity>
+              )}
+              {invStatus === 'approval_pending' && (
+                <View style={tw`mt-1 px-4 py-2 bg-gray-200 rounded self-start`}>
+                  <Text>承認待ち</Text>
+                </View>
+              )}
+              {invStatus === 'billable' && (
+                <TouchableOpacity
+                  onPress={() => onInvoice(p.id)}
+                  style={tw`mt-1 px-4 py-2 bg-indigo-200 rounded self-start`}
+                >
+                  <Text>請求書発行</Text>
+                </TouchableOpacity>
+              )}
               {/* 新規：エディタへ遷移して編集／CSV等へ */}
               <TouchableOpacity
                 style={tw`mt-2 px-4 py-2 bg-emerald-200 rounded self-start`}
@@ -433,7 +554,7 @@ export default function WIPScreen() {
                >
                 <Text>請求書編集へ</Text>
               </TouchableOpacity>
-              {p.invoiceStatus === 'issued' && (
+               {invStatus === 'issued' && (
                 <View style={tw`mt-2`}>
                   <TouchableOpacity
                     onPress={() => onPaid(p.id)}
@@ -464,13 +585,30 @@ export default function WIPScreen() {
                     }
                   />                                
                   <Text>金額: {b.amount}</Text>
-                  <Text>状態: {b.status}</Text>
-                  {b.status !== 'paid' && (
+                  <Text>状態: {statusLabel(b.status)}</Text>
+                  {b.status === 'returned' && !!b.returnComment && (
+                    <Text style={tw`mt-1 text-red-600`}>差戻し: {b.returnComment}</Text>
+                  )}
+
+                  {(b.status === 'pending' || b.status === 'returned') && (
+                    <TouchableOpacity
+                      onPress={() => requestApprovalBilling(p, b)}
+                      style={tw`mt-1 px-3 py-2 bg-indigo-200 rounded self-start`}
+                    >
+                      <Text>承認依頼</Text>
+                    </TouchableOpacity>
+                  )}
+                  {b.status === 'approval_pending' && (
+                    <View style={tw`mt-1 px-3 py-2 bg-gray-200 rounded self-start`}>
+                      <Text>承認待ち</Text>
+                    </View>
+                  )}
+                  {(b.status === 'billable' || b.status === 'issued') && (
                     <TouchableOpacity
                       onPress={() => onBillingAction(p.id, b)}
                       style={tw`mt-1 px-3 py-2 bg-indigo-200 rounded self-start`}
                     >
-                      <Text>{b.status === 'pending' ? '請求書発行' : '入金確認'}</Text>
+                      <Text>{b.status === 'billable' ? '請求書発行' : '入金確認'}</Text>
                     </TouchableOpacity>
                   )}
                   {/* 出来高ごとに請求書エディタへ */}
