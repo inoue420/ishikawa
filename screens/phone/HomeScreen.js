@@ -7,6 +7,7 @@ import tw from 'twrnc';
 import { DateContext } from '../../DateContext';
 import { fetchProjectsOverlappingRangeVisible, findEmployeeByIdOrEmail, isPrivUser } from '../../firestoreService';
 import { useFocusEffect } from '@react-navigation/native';
+import { fetchPendingInvoiceApprovals } from '../../billingApprovalService';
 
 export default function HomeScreen({ navigation, route }) {
   console.log('[HomeScreen] got userEmail =', route?.params?.userEmail);
@@ -20,6 +21,7 @@ export default function HomeScreen({ navigation, route }) {
   const passedLoginId = route?.params?.loginId ?? route?.params?.userLoginId ?? null;
   const userKeyForMe = userEmail ?? passedLoginId ?? null; // email or loginId
   const [me, setMe] = useState(null);
+  const [pendingInvoiceCount, setPendingInvoiceCount] = useState(0);
 
   // 追加: 従業員マップ（id/loginId/email → name）
   const [employeeMap, setEmployeeMap] = useState({});
@@ -38,6 +40,21 @@ export default function HomeScreen({ navigation, route }) {
     })();
     return () => { mounted = false; };
   }, [userKeyForMe]);
+
+  const loadPendingInvoiceApprovals = useCallback(async () => {
+    const email = String(userEmail || '').trim().toLowerCase();
+    if (!email) {
+      setPendingInvoiceCount(0);
+      return;
+    }
+    try {
+      const list = await fetchPendingInvoiceApprovals(email, { limit: 100 });
+      setPendingInvoiceCount(list.length);
+    } catch (e) {
+      console.error('[HomeScreen] loadPendingInvoiceApprovals error:', e?.message || e);
+      setPendingInvoiceCount(0);
+    }
+  }, [userEmail]);  
 
   // util
   const dateKey = d => {
@@ -225,6 +242,9 @@ export default function HomeScreen({ navigation, route }) {
 
   // 画面フォーカス時：TTLに従って再取得
   useFocusEffect(useCallback(() => { loadProjects({ force: false, withSpinner: false }); }, [loadProjects]));
+  useFocusEffect(useCallback(() => {
+    loadPendingInvoiceApprovals();
+  }, [loadPendingInvoiceApprovals]));  
   // 日付変更時：強制更新
   useEffect(() => { loadProjects({ force: true, withSpinner: false }); }, [selectedDate, loadProjects]);
   // 権限（me）変化時：強制更新
@@ -267,7 +287,12 @@ export default function HomeScreen({ navigation, route }) {
         refreshControl={
           <RefreshControl
             refreshing={isRefreshing}
-            onRefresh={() => loadProjects({ force: true, withSpinner: true })}
+            onRefresh={async () => {
+              await Promise.all([
+                loadProjects({ force: true, withSpinner: true }),
+                loadPendingInvoiceApprovals(),
+              ]);
+            }}
           />
         }
       >
@@ -348,6 +373,20 @@ export default function HomeScreen({ navigation, route }) {
           })
         )}
       </ScrollView>
+
+      {/* 請求書 承認待ち（承認者向け） */}
+      {(pendingInvoiceCount > 0 || me?.role === 'manager' || me?.role === 'executive') && (
+        <View style={tw`px-4 pb-2`}>
+          <TouchableOpacity
+            onPress={() => navigation.navigate('InvoiceApprovalList', { userEmail })}
+            activeOpacity={0.75}
+            style={tw`flex-row items-center justify-between bg-yellow-100 border border-yellow-300 rounded p-3`}
+          >
+            <Text style={tw`font-bold text-yellow-900`}>請求書 承認待ち</Text>
+            <Text style={tw`text-yellow-900`}>{pendingInvoiceCount}件</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* 承認ボタン（部長/役員） */}
       {me?.loginId && (me?.role === 'manager' || me?.role === 'executive') && (

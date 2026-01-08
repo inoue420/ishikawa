@@ -38,17 +38,23 @@ export default function InvoiceApprovalDetailScreen() {
   const openPreview = () => {
     if (!a) return;
     const screen = a.templateId === 'shimizu' ? 'InvoiceEditorShimizu' : 'InvoiceEditor';
-    // HomeStack 内から Tab(WIP) のネストスクリーンへ遷移
-    navigation.navigate('WIP', {
-      screen,
-      params: {
-        projectId: a.projectId,
-        stage: a.stage ?? null,
-        billingAmount: a.amountExTax ?? null,
-        billingId: a.billingId ?? null,
-        amount: a.amountExTax ?? null,
-      },
-    });
+    const params = {
+      projectId: a.projectId,
+      stage: a.stage ?? null,
+      billingAmount: a.amountExTax ?? null,
+      billingId: a.billingId ?? null,
+      amount: a.amountExTax ?? null,
+    };
+
+    // ① まずは「現在のスタック(HomeStack)」内で開く（＝戻るで承認画面に戻れる）
+    const routeNames = navigation?.getState?.()?.routeNames ?? [];
+    if (routeNames.includes(screen)) {
+      navigation.navigate(screen, params);
+      return;
+    }
+
+    // ② フォールバック：従来通り WIP タブのネスト画面へ（WIP導線は維持）
+    navigation.navigate('WIP', { screen, params });
   };
 
   const onApprove = async () => {
@@ -68,7 +74,7 @@ export default function InvoiceApprovalDetailScreen() {
         Alert.alert('差戻し', '差戻し理由を入力してください');
         return;
       }
-      await rejectInvoiceApprovalRequest(approvalId, { approverEmail: userEmail, returnComment: comment.trim() });
+      await rejectInvoiceApprovalRequest(approvalId, { approverEmail: userEmail, comment: comment.trim() });
       Alert.alert('差戻し', '差戻しました');
       navigation.goBack();
     } catch (e) {
