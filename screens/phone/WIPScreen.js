@@ -185,6 +185,7 @@ export default function WIPScreen() {
     setClientQuery('');
     setSelectedClientId(null);
     setStatusFilter('all');
+    setFilterJoin('and');
     setCloseFilter('all');
   };
 
@@ -193,14 +194,16 @@ export default function WIPScreen() {
 
     const clientActive = !!selectedClientId || !!q;
     const statusActive = statusFilter !== 'all';
+    const closeActive = closeFilter !== 'all';
 
     return (projects || []).filter((p) => {
-      // 既存：締め日フィルタ（常にANDで適用して現状挙動を維持）
       const c = findClientForProject(p);
-      if (closeFilter !== 'all') {
+      // 締め日条件
+      const closeHit = (() => {
+        if (!closeActive) return true;
         if (!c) return false;
-        if (c.closeType !== closeFilter) return false;
-      }
+        return c.closeType === closeFilter;
+      })();
 
       // 顧客条件
       const clientHit = (() => {
@@ -214,24 +217,29 @@ export default function WIPScreen() {
 
       // 状態条件
       const statusHit = (() => {
-        if (!statusActive) return true;
+        // 「全て」は OR に含めたとき “全件ヒット” になるべきなので、常に true 扱い
+        if (statusFilter === 'all') return true;
         const sts = getStatusesForProject(p);
         return sts.includes(statusFilter);
       })();
 
-      // AND/OR 結合（状態 + 顧客）
-      if (!clientActive && !statusActive) return true;
+      // AND/OR 結合（締め日 + 状態 + 顧客）
+      if (!clientActive && !statusActive && !closeActive) return true;
 
       if (filterJoin === 'or') {
-        if (!clientActive) return statusHit;
-        if (!statusActive) return clientHit;
-        return clientHit || statusHit;
+        return (
+          (clientActive ? clientHit : false) ||
+          statusHit ||
+          (closeActive ? closeHit : false)
+        );
       }
 
       // and
-      if (!clientActive) return statusHit;
-      if (!statusActive) return clientHit;
-      return clientHit && statusHit;
+      return (
+        (!clientActive || clientHit) &&
+        (!statusActive || statusHit) &&
+        (!closeActive || closeHit)
+      );
     });
   }, [
     projects,
