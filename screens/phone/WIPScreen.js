@@ -5,6 +5,7 @@ import {
   View, Text, TextInput,
   ActivityIndicator, FlatList, TouchableOpacity,
   RefreshControl,
+  Modal,
   ScrollView,
 } from 'react-native';
 import tw from 'twrnc';
@@ -45,6 +46,9 @@ export default function WIPScreen() {
   const [filterJoin, setFilterJoin] = useState('and'); // 'and' | 'or'
   const [closeFilter, setCloseFilter] = useState('all'); // 'all' | 'day' | 'eom'  
   const [refreshing, setRefreshing] = useState(false);
+  // まとめ請求（標準テンプレのみ）
+  const [bundleModalVisible, setBundleModalVisible] = useState(false);
+  const [bundlePickMap, setBundlePickMap] = useState({}); // { [projectId]: true }
   const navigation = useNavigation();
   const route = useRoute();
   const userEmail = String(route?.params?.userEmail || '').trim().toLowerCase();
@@ -68,7 +72,7 @@ export default function WIPScreen() {
       for (const p of all) {
         wip.push(p);
         // デフォルト請求金額（projectsコレクション内の値）を初期入力へ
-        const defAmt = p?.invoiceAmount ?? p?.amount ?? p?.budget ?? '';
+        const defAmt = p?.orderAmount ?? p?.invoiceAmount ?? p?.amount ?? p?.budget ?? '';
         if (defAmt !== '') initialInputs[p.id] = String(defAmt);
         if (p.isMilestoneBilling) milestoneProjects.push(p);
       }
@@ -230,6 +234,7 @@ export default function WIPScreen() {
         return (
           (clientActive ? clientHit : false) ||
           statusHit ||
+          (statusActive ? statusHit : false) ||
           (closeActive ? closeHit : false)
         );
       }
@@ -252,6 +257,28 @@ export default function WIPScreen() {
     statusFilter,
     filterJoin,
   ]);
+
+  // ── まとめ請求のブロック（清水テンプレは当面未対応）
+  const isShimizuClient = (c, fallbackName = '') => {
+    const templateId = String(c?.invoiceTemplateId || c?.invoiceTemplate || '').trim();
+    if (templateId === 'shimizu') return true;
+    const name = String(c?.name || fallbackName || '').replace(/\s/g, '');
+    return name.includes('清水建設');
+  };
+
+  const selectedClient = useMemo(
+    () => (selectedClientId ? clientsById[selectedClientId] : null),
+    [selectedClientId, clientsById]
+  );
+
+  const bundleBlockedByTemplate = useMemo(() => {
+    if (!selectedClientId) return false;
+    // 顧客マスタが取れない場合は "標準扱い" としてブロックしない（ユーザー操作で確認する）
+    if (!selectedClient) return false;
+    return isShimizuClient(selectedClient, selectedClient?.name || clientQuery);
+  }, [selectedClientId, selectedClient, clientQuery]);
+
+  const canBundleForSelectedClient = !!selectedClientId && !bundleBlockedByTemplate; 
 
   // ── 請求書エディタ：顧客テンプレに応じて遷移先を決める
   const resolveInvoiceScreenName = (p) => {
@@ -308,6 +335,110 @@ export default function WIPScreen() {
       billingId: opts.billingId ?? null,
       amount: billingAmount,
       itemName: opts.itemName ?? (p.title || p.name || p.projectName || '工事費 一式'),
+    });
+  };
+  // ─────────────────────────────────────────────
+  // まとめ請求（標準テンプレのみ）
+  //  - 顧客で絞り込んだ通常請求（非出来高）のみ対象
+  //  - 出来高は対象外（後日拡張）
+  //  - 清水テンプレはブロック（当面未対応）
+  // ─────────────────────────────────────────────
+  const bundleCandidates = useMemo(() => {
+    if (!selectedClientId) return [];
+    return (projects || [])
+      .filter((p) => {
+        const c = findClientForProject(p);
+        if (!c || c.id !== selectedClientId) return false;
+        // 出来高は後日拡張するため現時点では対象外
+        if (p.isMilestoneBilling) return false;
+        const st = p?.invoiceStatus || 'pending';
+        // ★変更：請求中（issued）のみ対象
+        return st === 'issued';
+      })
+      .sort((a, b) => {
+        const ta = pToDate(a?.endDate)?.getTime?.() || 0;
+        const tb = pToDate(b?.endDate)?.getTime?.() || 0;
+        return ta - tb;
+      });
+  }, [projects, selectedClientId, clientsById, clients, billingsMap]);
+
+  const bundleSelectedProjects = useMemo(
+    () => bundleCandidates.filter((p) => !!bundlePickMap[p.id]),
+    [bundleCandidates, bundlePickMap]
+  );
+
+  const bundleCanEdit = bundleSelectedProjects.length > 0;
+  const bundleTotalExTax = useMemo(() => {
+    return bundleSelectedProjects.reduce((sum, p) => {
+      // issued の場合は invoiceAmount を優先（過去の発行金額に寄せる）
+      const st = p?.invoiceStatus || 'pending';
+      if (st === 'issued') {
+        const n = toNumberSafe(p?.invoiceAmount);
+        return sum + (n != null ? n : getBaseAmountForProject(p) || 0);
+      }
+      return sum + (getBaseAmountForProject(p) || 0);
+    }, 0);
+  }, [bundleSelectedProjects, inputs]);
+
+  const toggleBundlePick = (projectId) => {
+    setBundlePickMap((m) => ({ ...m, [projectId]: !m[projectId] }));
+  };
+
+  const closeBundleModal = () => {
+    setBundleModalVisible(false);
+    setBundlePickMap({});
+  };
+
+  const openBundleModal = () => {
+    if (!selectedClientId) {
+      alert('まず顧客を選択してください');
+      return;
+    }
+    if (!canBundleForSelectedClient) {
+      alert('この顧客（清水テンプレ）は、まとめ請求が未対応です。個別発行で運用してください。');
+      return;
+    }
+    setBundlePickMap({});
+    setBundleModalVisible(true);
+  };
+
+  const buildBundleInvoiceItems = (targets) =>
+    (targets || []).map((p, idx) => {
+      // issued の場合は invoiceAmount を優先（発行済金額に寄せる）
+      const st = p?.invoiceStatus || 'pending';
+      const issuedAmt = toNumberSafe(p?.invoiceAmount);
+      const amountExTax =
+        st === 'issued'
+          ? (issuedAmt != null ? issuedAmt : (getBaseAmountForProject(p) || 0))
+          : (getBaseAmountForProject(p) || 0);
+      return {
+        no: idx + 1,
+        name: p?.name || '工事費',
+        qty: '1',
+        unit: '式',
+        unitPrice: String(amountExTax),
+      };
+    });
+
+  const openBundleInvoiceEditor = (targets) => {
+    const list = Array.isArray(targets) ? targets : [];
+    if (!list.length) {
+      alert('対象プロジェクトを選択してください');
+      return;
+    }
+    const bad = list.find((p) => resolveTemplateId(p) === 'shimizu');
+    if (bad) {
+      alert('清水テンプレのプロジェクトが含まれているため、まとめ請求はできません（標準のみ対応）');
+      return;
+    }
+
+    const c = selectedClient || findClientForProject(list[0]) || null;
+    const clientName = c?.name || list[0]?.clientName || '';
+
+    navigation.navigate('InvoiceEditor', {
+      clientName,
+      initialItems: buildBundleInvoiceItems(list),
+      bundleProjectIds: list.map((p) => p.id),
     });
   };
 
@@ -383,7 +514,7 @@ export default function WIPScreen() {
         alert(`承認後のみ発行できます（現在: ${statusLabel(st)}）`);
         return;
       }
-      const amt = Number(inputs[projId] || 0);
+      const amt = toNumberSafe(inputs[projId]) ?? 0;
       if (!amt) return alert('金額を入力してください');
       await updateProjectInvoice(projId, { amount: amt, newStatus: 'issued' });
       setProjects(ps =>
@@ -408,7 +539,7 @@ export default function WIPScreen() {
         alert(`請求中のみ入金にできます（現在: ${statusLabel(st)}）`);
         return;
       }
-      const amt = Number(inputs[projId] || 0);
+      const amt = toNumberSafe(inputs[projId]) ?? toNumberSafe(p?.invoiceAmount) ?? 0;
       await updateProjectInvoice(projId, { amount: amt, newStatus: 'paid' });
       setProjects(ps => ps.filter(p => p.id !== projId));
     } catch (e) {
@@ -700,6 +831,33 @@ export default function WIPScreen() {
                 </View>
               )}
             </View>
+
+            {/* まとめ請求（標準テンプレのみ） */}
+            <View style={tw`mt-3 bg-white border border-gray-200 rounded-lg p-3`}>
+              <Text style={tw`font-bold mb-2`}>まとめ請求（請求中のみ / 標準テンプレ）</Text>
+
+              <TouchableOpacity
+                onPress={openBundleModal}
+                activeOpacity={0.7}
+                disabled={!selectedClientId || !canBundleForSelectedClient}
+                style={tw`${(!selectedClientId || !canBundleForSelectedClient) ? 'bg-gray-200' : 'bg-blue-200'} px-4 py-2 rounded`}
+              >
+                <Text>{!selectedClientId ? '顧客を選択してください' : 'まとめ請求（請求中から選択）'}</Text>
+              </TouchableOpacity>
+
+              {selectedClientId && bundleBlockedByTemplate && (
+                <Text style={tw`text-xs text-red-600 mt-2`}>
+                  ※清水建設テンプレは当面「まとめ請求」未対応です（個別発行で運用してください）。
+                </Text>
+              )}
+              {selectedClientId && !bundleBlockedByTemplate && (
+                <Text style={tw`text-xs text-gray-500 mt-2`}>
+                  ※「請求中（請求書発行済）」の案件だけをまとめて、標準請求書に載せ替えます。{"\n"}
+                  ※承認依頼は、各プロジェクトの「承認依頼」ボタンから個別に行ってください。{"\n"}
+                  ※出来高請求（マイルストーン）は、後日まとめ請求対応予定です。
+                </Text>
+              )}
+            </View>
           </View>
         }
         renderItem={({ item: p }) => {
@@ -861,6 +1019,90 @@ export default function WIPScreen() {
           );
         }}
       />
+
+      {/* まとめ請求モーダル（標準テンプレのみ） */}
+      <Modal
+        visible={bundleModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeBundleModal}
+      >
+        <View
+          style={[
+            tw`flex-1 justify-center p-4`,
+            { backgroundColor: 'rgba(0,0,0,0.4)' },
+          ]}
+        >
+          <View style={[tw`bg-white rounded-lg p-4`, { maxHeight: '85%' }]}
+          >
+            <View style={tw`flex-row items-center justify-between mb-2`}>
+              <Text style={tw`text-lg font-bold`}>まとめ請求</Text>
+
+              <TouchableOpacity
+                onPress={closeBundleModal}
+                activeOpacity={0.7}
+                style={tw`px-3 py-1 bg-gray-100 rounded`}
+              >
+                <Text style={tw`text-gray-700`}>閉じる</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={tw`text-xs text-gray-600 mb-2`}>
+              顧客: {selectedClient?.name || clientsById[selectedClientId]?.name || clientQuery || '—'}
+            </Text>
+
+            <Text style={tw`text-xs text-gray-600 mb-3`}>
+              選択: {bundleSelectedProjects.length}件 ／ 合計(税抜): {Number(bundleTotalExTax || 0).toLocaleString('ja-JP')}円
+            </Text>
+
+            <View style={tw`border border-gray-200 rounded mb-3`}>
+              <ScrollView style={tw`p-2`} showsVerticalScrollIndicator={false}>
+                {bundleCandidates.length === 0 ? (
+                  <Text style={tw`text-gray-500`}>対象となるプロジェクトがありません。</Text>
+                ) : (
+                  bundleCandidates.map((p, idx) => {
+                    const checked = !!bundlePickMap[p.id];
+                    const st = p?.invoiceStatus || 'pending';
+                    const amount = (toNumberSafe(p?.invoiceAmount) ?? getBaseAmountForProject(p) ?? 0);
+                    return (
+                      <View
+                        key={p.id}
+                        style={tw`${idx !== bundleCandidates.length - 1 ? 'border-b border-gray-200' : ''} py-2`}
+                      >
+                        <TouchableOpacity
+                          onPress={() => toggleBundlePick(p.id)}
+                          activeOpacity={0.7}
+                          style={tw`flex-row items-start`}
+                        >
+                          <Text style={tw`mr-2 mt-0.5`}>{checked ? '☑' : '☐'}</Text>
+                          <View style={tw`flex-1`}>
+                            <Text style={tw`font-bold`}>{p.name}</Text>
+                            <Text style={tw`text-xs text-gray-600 mt-1`}>
+                              状態: {statusLabel(st)} ／ 金額(税抜): {Number(amount || 0).toLocaleString('ja-JP')}円
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })
+                )}
+              </ScrollView>
+            </View>
+
+            <View style={tw`flex-row flex-wrap justify-end`}
+            >
+              <TouchableOpacity
+                onPress={() => openBundleInvoiceEditor(bundleSelectedProjects)}
+                activeOpacity={0.7}
+                disabled={!bundleCanEdit}
+                style={tw`${bundleCanEdit ? 'bg-emerald-200' : 'bg-gray-200'} px-4 py-2 rounded mr-2 mb-2`}
+              >
+                <Text>まとめ請求書を作成（編集へ）</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

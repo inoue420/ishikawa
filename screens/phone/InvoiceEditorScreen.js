@@ -48,6 +48,10 @@ export default function InvoiceEditorScreen() {
   const projectId = route?.params?.projectId ?? null;
   const stage = route?.params?.stage ?? null;
   const billingAmountParam = route?.params?.billingAmount ?? null;   
+  // まとめ請求（標準テンプレのみ）
+  const initialItemsParam = route?.params?.initialItems ?? null;
+  const initialClientNameParam = route?.params?.clientName ?? null;
+  const bundleProjectIds = route?.params?.bundleProjectIds ?? null;
 
   const [clientName, setClientName] = useState('　御中');
   const [invoiceNo, setInvoiceNo] = useState(() => {
@@ -63,6 +67,25 @@ export default function InvoiceEditorScreen() {
   const [title] = useState('請　求　書');
   const [items, setItems] = useState([{ no: 1, name: '工事費 一式', qty: '1', unit: '式', unitPrice: '0', amount: 0 }]);
 
+  // まとめ請求：初期値を注入（projectId が無い場合でも動作させる）
+  useEffect(() => {
+    if (initialClientNameParam) {
+      setClientName(String(initialClientNameParam));
+    }
+    if (Array.isArray(initialItemsParam) && initialItemsParam.length) {
+      setItems(
+        initialItemsParam.map((it, idx) => ({
+          no: idx + 1,
+          name: String(it?.name ?? ''),
+          qty: String(it?.qty ?? '1'),
+          unit: String(it?.unit ?? '式'),
+          unitPrice: String(it?.unitPrice ?? '0'),
+          amount: 0,
+        }))
+      );
+    }
+  }, [initialClientNameParam, initialItemsParam]);
+  
   // --- ロゴ（Base64 data URI） ---
   const [logoTeam, setLogoTeam] = useState(null);
   const [logoSymbol, setLogoSymbol] = useState(null);

@@ -724,6 +724,30 @@ export async function updateProjectInvoice(projectId, { amount, newStatus }) {
   return updateDoc(ref, payload);
 }
 
+/**
+ * ── 新規：複数プロジェクトの請求情報を一括更新（まとめ請求用）
+ * entries: [{ projectId: string, amount: number|string, newStatus: 'issued'|'paid'|... }]
+ */
+export async function batchUpdateProjectInvoices(entries = []) {
+  const list = Array.isArray(entries) ? entries : [];
+  if (!list.length) return;
+
+  const batch = writeBatch(db);
+  for (const e of list) {
+    const projectId = e?.projectId;
+    if (!projectId) continue;
+    const ref = doc(db, 'projects', projectId);
+    const amount = Number(String(e?.amount ?? 0).replace(/,/g, '').trim()) || 0;
+    const newStatus = e?.newStatus || 'issued';
+    batch.update(ref, {
+      invoiceAmount: amount,
+      invoiceStatus: newStatus,
+      ...(newStatus === 'paid' && { status: 'completed' }),
+    });
+  }
+  await batch.commit();
+}
+
 /** ── 新規：請求方式切替 */
 export async function updateProjectBillingType(projectId, isMilestoneBilling) {
   const ref = doc(db, 'projects', projectId);
