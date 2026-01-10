@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
-  View, Text, TextInput,
+  View, Text, TextInput, Alert,
   ActivityIndicator, FlatList, TouchableOpacity,
   RefreshControl,
   Modal,
@@ -54,6 +54,14 @@ export default function WIPScreen() {
   const userEmail = String(route?.params?.userEmail || '').trim().toLowerCase();
   const userLoginId = String(route?.params?.loginId || route?.params?.userLoginId || '').trim().toLowerCase();
 
+  const confirmAsync = (title, message) =>
+    new Promise((resolve) => {
+      Alert.alert(title, message, [
+        { text: 'キャンセル', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'OK', onPress: () => resolve(true) },
+      ]);
+    });
+  
   // ── ① WIP 一覧を取得（初期表示 / Pull-to-refresh で共通）
   const loadWip = useCallback(async ({ showLoading = true } = {}) => {
     if (showLoading) setLoading(true);
@@ -233,7 +241,6 @@ export default function WIPScreen() {
       if (filterJoin === 'or') {
         return (
           (clientActive ? clientHit : false) ||
-          statusHit ||
           (statusActive ? statusHit : false) ||
           (closeActive ? closeHit : false)
         );
@@ -352,8 +359,8 @@ export default function WIPScreen() {
         // 出来高は後日拡張するため現時点では対象外
         if (p.isMilestoneBilling) return false;
         const st = p?.invoiceStatus || 'pending';
-        // ★変更：請求中（issued）のみ対象
-        return st === 'issued';
+        // ★変更：請求可能（billable）のみ対象
+        return st === 'billable';
       })
       .sort((a, b) => {
         const ta = pToDate(a?.endDate)?.getTime?.() || 0;
@@ -454,6 +461,13 @@ export default function WIPScreen() {
       if (!amountExTax) return alert('金額を入力してください');
       if (!userEmail && !userLoginId) return alert('申請者情報が取得できません（userEmail/loginId）');
 
+      // ✅ 承認依頼の時点で Firestore に金額を保存（請求可能で戻る問題を潰す）
+      await updateProjectInvoice(p.id, { amount: amountExTax, newStatus: st });
+      setProjects((ps) =>
+        ps.map((x) => (x.id === p.id ? { ...x, invoiceAmount: amountExTax } : x))
+      );
+      setInputs((m) => ({ ...m, [p.id]: String(amountExTax) }));
+
       await submitInvoiceApprovalRequest({
         projectId: p.id,
         templateId: resolveTemplateId(p),
@@ -485,6 +499,13 @@ export default function WIPScreen() {
       if (!amountExTax) return alert('金額を入力してください');
       if (!userEmail && !userLoginId) return alert('申請者情報が取得できません（userEmail/loginId）');
 
+      // ✅ 承認依頼時点で金額を保存
+      await updateBillingAmount(p.id, b.id, amountExTax);
+      setBillingsMap((m) => ({
+        ...m,
+        [p.id]: (m[p.id] || []).map((x) => (x.id === b.id ? { ...x, amount: amountExTax } : x)),
+      }));
+
       await submitInvoiceApprovalRequest({
         projectId: p.id,
         billingId: b.id,
@@ -506,7 +527,7 @@ export default function WIPScreen() {
   };
   
   // ── ② 通常請求：請求書発行
-  const onInvoice = async projId => {
+  const markIssuedProject = async (projId) => {
     try {
       const p = projects.find(x => x.id === projId);
       const st = p?.invoiceStatus || 'pending';
@@ -514,8 +535,10 @@ export default function WIPScreen() {
         alert(`承認後のみ発行できます（現在: ${statusLabel(st)}）`);
         return;
       }
-      const amt = toNumberSafe(inputs[projId]) ?? 0;
+      const amt = toNumberSafe(inputs[projId]) ?? getBaseAmountForProject(p);
       if (!amt) return alert('金額を入力してください');
+      const ok = await confirmAsync('請求中にしますか？', 'この操作はステータスを「請求中」に変更します。');
+      if (!ok) return;
       await updateProjectInvoice(projId, { amount: amt, newStatus: 'issued' });
       setProjects(ps =>
         ps.map(p =>
@@ -529,6 +552,24 @@ export default function WIPScreen() {
       alert('請求処理に失敗しました');
     }
   };
+
+  const revertIssuedToBillable = async (projId) => {
+  const ok = await confirmAsync('戻しますか？', 'ステータスを「請求可能」に戻します。');
+  if (!ok) return;
+  const p = projects.find((x) => x.id === projId);
+  const amt = toNumberSafe(p?.invoiceAmount) ?? toNumberSafe(inputs[projId]) ?? 0;
+  await updateProjectInvoice(projId, { amount: amt, newStatus: 'billable' });
+  setProjects((ps) => ps.map((x) => (x.id === projId ? { ...x, invoiceStatus: 'billable' } : x)));
+};
+
+const revertBillableToPending = async (projId) => {
+  const ok = await confirmAsync('戻しますか？', 'ステータスを「未請求」に戻します。');
+  if (!ok) return;
+  const p = projects.find((x) => x.id === projId);
+  const amt = toNumberSafe(p?.invoiceAmount) ?? toNumberSafe(inputs[projId]) ?? 0;
+  await updateProjectInvoice(projId, { amount: amt, newStatus: 'pending' });
+  setProjects((ps) => ps.map((x) => (x.id === projId ? { ...x, invoiceStatus: 'pending' } : x)));
+};
 
   // ── ③ 通常請求：入金確認
   const onPaid = async projId => {
@@ -617,6 +658,56 @@ export default function WIPScreen() {
       alert('マイルストーン処理に失敗しました');
     }
   };
+
+const markIssuedBilling = async (projId, bill) => {
+  const amt =
+    toNumberSafe(billingInputsMap[projId]?.[bill.id]) ??
+    toNumberSafe(bill.amount) ??
+    0;
+
+  if (!amt) return alert('金額を入力してください');
+
+  const ok = await confirmAsync('請求中にしますか？', 'この出来高を「請求中」に変更します。');
+  if (!ok) return;
+
+  await updateBillingAmount(projId, bill.id, amt);
+  await updateBillingStatus(projId, bill.id, 'issued');
+
+  setBillingsMap((m) => ({
+    ...m,
+    [projId]: (m[projId] || []).map((b) =>
+      b.id === bill.id ? { ...b, amount: amt, status: 'issued' } : b
+    ),
+  }));
+};
+
+const revertBillingIssuedToBillable = async (projId, billId) => {
+  const ok = await confirmAsync('戻しますか？', 'ステータスを「請求可能」に戻します。');
+  if (!ok) return;
+
+  await updateBillingStatus(projId, billId, 'billable');
+
+  setBillingsMap((m) => ({
+    ...m,
+    [projId]: (m[projId] || []).map((b) =>
+      b.id === billId ? { ...b, status: 'billable' } : b
+    ),
+  }));
+};
+
+const revertBillingBillableToPending = async (projId, billId) => {
+  const ok = await confirmAsync('戻しますか？', 'ステータスを「未請求」に戻します。');
+  if (!ok) return;
+
+  await updateBillingStatus(projId, billId, 'pending');
+
+  setBillingsMap((m) => ({
+    ...m,
+    [projId]: (m[projId] || []).map((b) =>
+      b.id === billId ? { ...b, status: 'pending' } : b
+    ),
+  }));
+};
 
   // ── ⑥ マイル請求：追加
   const onAddMilestone = async projId => {
@@ -834,7 +925,7 @@ export default function WIPScreen() {
 
             {/* まとめ請求（標準テンプレのみ） */}
             <View style={tw`mt-3 bg-white border border-gray-200 rounded-lg p-3`}>
-              <Text style={tw`font-bold mb-2`}>まとめ請求（請求中のみ / 標準テンプレ）</Text>
+              <Text style={tw`font-bold mb-2`}>まとめ請求（請求可能のみ / 標準テンプレ）</Text>
 
               <TouchableOpacity
                 onPress={openBundleModal}
@@ -842,7 +933,7 @@ export default function WIPScreen() {
                 disabled={!selectedClientId || !canBundleForSelectedClient}
                 style={tw`${(!selectedClientId || !canBundleForSelectedClient) ? 'bg-gray-200' : 'bg-blue-200'} px-4 py-2 rounded`}
               >
-                <Text>{!selectedClientId ? '顧客を選択してください' : 'まとめ請求（請求中から選択）'}</Text>
+                <Text>{!selectedClientId ? '顧客を選択してください' : 'まとめ請求（請求可能から選択）'}</Text>
               </TouchableOpacity>
 
               {selectedClientId && bundleBlockedByTemplate && (
@@ -852,7 +943,7 @@ export default function WIPScreen() {
               )}
               {selectedClientId && !bundleBlockedByTemplate && (
                 <Text style={tw`text-xs text-gray-500 mt-2`}>
-                  ※「請求中（請求書発行済）」の案件だけをまとめて、標準請求書に載せ替えます。{"\n"}
+                   ※「請求可能」の案件だけをまとめて、標準請求書に載せ替えます。{"\n"}
                   ※承認依頼は、各プロジェクトの「承認依頼」ボタンから個別に行ってください。{"\n"}
                   ※出来高請求（マイルストーン）は、後日まとめ請求対応予定です。
                 </Text>
@@ -908,12 +999,20 @@ export default function WIPScreen() {
                 </View>
               )}
               {invStatus === 'billable' && (
-                <TouchableOpacity
-                  onPress={() => onInvoice(p.id)}
-                  style={tw`mt-1 px-4 py-2 bg-indigo-200 rounded self-start`}
-                >
-                  <Text>請求書発行</Text>
-                </TouchableOpacity>
+                <>
+                  <TouchableOpacity
+                    onPress={() => markIssuedProject(p.id)}
+                    style={tw`mt-1 px-4 py-2 bg-indigo-200 rounded self-start`}
+                  >
+                    <Text>請求中にする（発行済）</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => revertBillableToPending(p.id)}
+                    style={tw`mt-2 px-4 py-2 bg-amber-200 rounded self-start`}
+                  >
+                    <Text>未請求に戻す</Text>
+                  </TouchableOpacity>
+                </>
               )}
               {/* 新規：エディタへ遷移して編集／CSV等へ */}
               <TouchableOpacity
@@ -929,6 +1028,12 @@ export default function WIPScreen() {
                     style={tw`px-4 py-2 bg-green-200 rounded self-start`}
                   >
                     <Text>入金確認</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => revertIssuedToBillable(p.id)}
+                    style={tw`mt-2 px-4 py-2 bg-amber-200 rounded self-start`}
+                  >
+                    <Text>請求可能に戻す</Text>
                   </TouchableOpacity>
                 </View>
               )}
@@ -971,13 +1076,37 @@ export default function WIPScreen() {
                       <Text>承認待ち</Text>
                     </View>
                   )}
-                  {(b.status === 'billable' || b.status === 'issued') && (
-                    <TouchableOpacity
-                      onPress={() => onBillingAction(p.id, b)}
-                      style={tw`mt-1 px-3 py-2 bg-indigo-200 rounded self-start`}
-                    >
-                      <Text>{b.status === 'billable' ? '請求書発行' : '入金確認'}</Text>
-                    </TouchableOpacity>
+                  {b.status === 'billable' && (
+                    <>
+                      <TouchableOpacity
+                        onPress={() => markIssuedBilling(p.id, b)}
+                        style={tw`mt-1 px-3 py-2 bg-indigo-200 rounded self-start`}
+                      >
+                        <Text>請求中にする（発行済）</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => revertBillingBillableToPending(p.id, b.id)}
+                        style={tw`mt-2 px-3 py-2 bg-amber-200 rounded self-start`}
+                      >
+                        <Text>未請求に戻す</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                  {b.status === 'issued' && (
+                    <>
+                      <TouchableOpacity
+                        onPress={() => onBillingAction(p.id, b)}
+                        style={tw`mt-1 px-3 py-2 bg-indigo-200 rounded self-start`}
+                      >
+                        <Text>入金確認</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => revertBillingIssuedToBillable(p.id, b.id)}
+                        style={tw`mt-2 px-3 py-2 bg-amber-200 rounded self-start`}
+                      >
+                        <Text>請求可能に戻す</Text>
+                      </TouchableOpacity>
+                    </>
                   )}
                   {/* 出来高ごとに請求書エディタへ */}
                   <TouchableOpacity
