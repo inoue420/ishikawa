@@ -9,7 +9,7 @@ import * as Sharing from 'expo-sharing';
 import { printToFileAsync } from 'expo-print';
 import { Asset } from 'expo-asset';
 
-import { fetchProjectById } from '../../firestoreService';
+import { fetchProjectById, batchUpdateProjectInvoices, updateBillingStatus, updateBillingAmount } from '../../firestoreService';
 
 // assets同梱（要配置：assets/invoice-templates/shimizu.png）
 const SHIMIZU_BG_MOD = require('../../assets/invoice-templates/shimizu.png');
@@ -114,6 +114,7 @@ export default function InvoiceEditorShimizuScreen() {
   const navigation = useNavigation();
 
   const projectId = route?.params?.projectId ?? null;
+  const billingId = route?.params?.billingId ?? null;
   const billingAmountParam = route?.params?.billingAmount ?? route?.params?.amount ?? null;
 
   const seededRef = useRef(false);
@@ -268,6 +269,29 @@ export default function InvoiceEditorShimizuScreen() {
   const onExport = useCallback(async () => {
     try {
       const { uri } = await generatePDF();
+
+      // 単独請求：PDFエクスポート時点で「請求中」へ遷移（税抜＝amount4を保存）
+      if (projectId) {
+        const amountExTax = Number(String(amount4 || 0).replace(/,/g, '').trim()) || 0;
+        try {
+          // 出来高（billings）を編集している場合は billing 側を更新
+          if (billingId) {
+            await updateBillingAmount(projectId, billingId, amountExTax);
+            await updateBillingStatus(projectId, billingId, 'issued');
+          } else {
+            await batchUpdateProjectInvoices([
+              { projectId, amount: amountExTax, newStatus: 'issued' },
+            ]);
+          }
+        } catch (err) {
+          console.log(err);
+          Alert.alert(
+            'ステータス更新失敗',
+            'PDFは作成しましたが、請求中ステータスへの更新に失敗しました。通信状況を確認して、WIP画面から更新してください。'
+          );
+        }
+      }
+
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri);
       } else {
@@ -277,7 +301,7 @@ export default function InvoiceEditorShimizuScreen() {
       console.warn(e);
       Alert.alert('PDF出力失敗', 'PDFの作成に失敗しました。');
     }
-  }, [generatePDF]);
+  }, [generatePDF, projectId, billingId, amount4]);
 
   const Radio = ({ value, label, selected, onPress }) => (
     <TouchableOpacity onPress={onPress} activeOpacity={0.8} style={tw`flex-row items-center mr-4 mb-2`}>

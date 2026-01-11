@@ -5,7 +5,7 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import tw from 'twrnc';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { fetchProjectById, batchUpdateProjectInvoices } from '../../firestoreService';
+import { fetchProjectById, batchUpdateProjectInvoices, updateBillingStatus, updateBillingAmount } from '../../firestoreService';
 import { printToFileAsync } from 'expo-print';
 import { Asset } from 'expo-asset';
 
@@ -52,6 +52,7 @@ export default function InvoiceEditorScreen() {
   const initialItemsParam = route?.params?.initialItems ?? null;
   const initialClientNameParam = route?.params?.clientName ?? null;
   const bundleProjectIds = route?.params?.bundleProjectIds ?? null;
+  const billingId = route?.params?.billingId ?? null;
 
   const [clientName, setClientName] = useState('　御中');
   const [invoiceNo, setInvoiceNo] = useState(() => {
@@ -379,13 +380,33 @@ export default function InvoiceEditorScreen() {
             );
           }
         }
+      } else if (projectId) {
+        // 単独請求：PDFエクスポート時点で「請求中」へ遷移（税抜＝subtotalを保存）
+        const amountExTax = Number(subtotal || 0);
+        try {
+          // 出来高（billings）を編集している場合は billing 側を更新
+          if (billingId) {
+            await updateBillingAmount(projectId, billingId, amountExTax);
+            await updateBillingStatus(projectId, billingId, 'issued');
+          } else {
+            await batchUpdateProjectInvoices([
+              { projectId, amount: amountExTax, newStatus: 'issued' },
+            ]);
+          }
+        } catch (err) {
+          console.log(err);
+          Alert.alert(
+            'ステータス更新失敗',
+            'PDFは作成しましたが、請求中ステータスへの更新に失敗しました。通信状況を確認して、WIP画面から更新してください。'
+          );
+        }
       }
 
       await Sharing.shareAsync(uri);
     } catch (e) {
       Alert.alert('PDF出力失敗', 'PDFの作成に失敗しました。');
     }
-  }, [generatePDF, bundleProjectIds, items]);
+  }, [generatePDF, bundleProjectIds, items, projectId, billingId, subtotal]);
   return (
     <ScrollView style={tw`flex-1 bg-white`} contentContainerStyle={tw`p-4`}>
       <View style={tw`mb-4`}>
