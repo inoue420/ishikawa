@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   View, Text, TextInput, Alert,
@@ -41,6 +41,7 @@ export default function WIPScreen() {
   const [billingInputsMap, setBillingInputsMap] = useState({});
   const [clients, setClients] = useState([]);
   const [clientQuery, setClientQuery] = useState('');
+  const didFocusLoadRef = useRef(false);
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | pending | approval_pending | returned | billable | issued | paid
   const [filterJoin, setFilterJoin] = useState('and'); // 'and' | 'or'
@@ -119,9 +120,13 @@ export default function WIPScreen() {
     }
   }, []);
 
-  useEffect(() => {
-    loadWip();
-  }, [loadWip]);
+  useFocusEffect(
+    useCallback(() => {
+      const first = !didFocusLoadRef.current;
+      didFocusLoadRef.current = true;
+      loadWip({ showLoading: first });
+    }, [loadWip])
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -420,6 +425,7 @@ export default function WIPScreen() {
           : (getBaseAmountForProject(p) || 0);
       return {
         no: idx + 1,
+        projectId: p.id,
         name: p?.name || '工事費',
         qty: '1',
         unit: '式',

@@ -5,7 +5,7 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import tw from 'twrnc';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { fetchProjectById } from '../../firestoreService';
+import { fetchProjectById, batchUpdateProjectInvoices } from '../../firestoreService';
 import { printToFileAsync } from 'expo-print';
 import { Asset } from 'expo-asset';
 
@@ -76,6 +76,7 @@ export default function InvoiceEditorScreen() {
       setItems(
         initialItemsParam.map((it, idx) => ({
           no: idx + 1,
+          projectId: it?.projectId ?? null,
           name: String(it?.name ?? ''),
           qty: String(it?.qty ?? '1'),
           unit: String(it?.unit ?? '式'),
@@ -356,11 +357,35 @@ export default function InvoiceEditorScreen() {
   const exportPDF = useCallback(async () => {
     try {
       const uri = await generatePDF();
+
+      // まとめ請求：PDFエクスポート時点で「請求中」へ遷移
+      if (Array.isArray(bundleProjectIds) && bundleProjectIds.length > 0) {
+        const entries = (items || [])
+          .filter((it) => !!it?.projectId)
+          .map((it) => ({
+            projectId: it.projectId,
+            amount: it.unitPrice,
+            newStatus: 'issued',
+          }));
+
+        if (entries.length > 0) {
+          try {
+            await batchUpdateProjectInvoices(entries);
+          } catch (err) {
+            console.log(err);
+            Alert.alert(
+              'ステータス更新失敗',
+              'PDFは作成しましたが、請求中ステータスへの更新に失敗しました。通信状況を確認して、WIP画面から更新してください。'
+            );
+          }
+        }
+      }
+
       await Sharing.shareAsync(uri);
     } catch (e) {
       Alert.alert('PDF出力失敗', 'PDFの作成に失敗しました。');
     }
-  }, [generatePDF]);
+  }, [generatePDF, bundleProjectIds, items]);
   return (
     <ScrollView style={tw`flex-1 bg-white`} contentContainerStyle={tw`p-4`}>
       <View style={tw`mb-4`}>
