@@ -80,7 +80,7 @@ export default function WIPScreen() {
       for (const p of all) {
         wip.push(p);
         // デフォルト請求金額（projectsコレクション内の値）を初期入力へ
-        const defAmt = p?.orderAmount ?? p?.invoiceAmount ?? p?.amount ?? p?.budget ?? '';
+        const defAmt = p?.invoiceAmount ?? p?.orderAmount ?? p?.amount ?? p?.budget ?? '';
         if (defAmt !== '') initialInputs[p.id] = String(defAmt);
         if (p.isMilestoneBilling) milestoneProjects.push(p);
       }
@@ -318,8 +318,8 @@ export default function WIPScreen() {
     const typed = toNumberSafe(inputs[p.id]);
     if (typed != null) return typed;
     return (
-      toNumberSafe(p?.orderAmount) ??
       toNumberSafe(p?.invoiceAmount) ??
+      toNumberSafe(p?.orderAmount) ??
       toNumberSafe(p?.amount) ??
       toNumberSafe(p?.budget) ??
       0
