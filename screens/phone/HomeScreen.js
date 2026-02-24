@@ -320,7 +320,7 @@ export default function HomeScreen({ navigation, route }) {
                 onPress={() => {
                   // 限定公開 + 非特権者は閲覧不可
                   if (proj?.visibility === 'limited' && !isPrivUser(me)) {
-                    Alert.alert('閲覧できません', 'このプロジェクトは限定公開です（役員・部長・事務のみ）。');
+                    Alert.alert('閲覧できません', 'このプロジェクトは限定公開です（役員・管理職・事務のみ）。');
                     return;
                   }
                   navigation.navigate('ProjectDetail', {
@@ -388,12 +388,12 @@ export default function HomeScreen({ navigation, route }) {
         </View>
       )}
 
-      {/* 承認ボタン（部長/役員） */}
+      {/* 承認ボタン（管理職/役員） */}
       {me?.loginId && (me?.role === 'manager' || me?.role === 'executive') && (
         <View style={tw`p-4 border-t border-gray-200 bg-white`}>
           <Button
             title={me?.role === 'executive'
-              ? '出勤認証（直属の部長の申請）'
+              ? '出勤認証（直属の管理職の申請）'
               : '出勤認証（自分の部下のみ）'}
             onPress={() =>
               navigation.navigate('ManagerApproval', { managerLoginId: me.loginId, approverRole: me.role })

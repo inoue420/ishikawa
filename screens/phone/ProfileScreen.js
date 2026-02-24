@@ -45,7 +45,7 @@ export default function ProfileScreen({ navigation }) {
         const me = email ? await findEmployeeByIdOrEmail(email) : null;
         if (mounted) {
           if (!isPrivUser(me)) {
-            Alert.alert('アクセスできません', 'この画面は役員・部長・事務のみが閲覧できます。', [
+            Alert.alert('アクセスできません', 'この画面は役員・管理職・事務のみが閲覧できます。', [
               { text: 'OK', onPress: () => navigation.goBack() },
             ]);
           }
@@ -53,7 +53,7 @@ export default function ProfileScreen({ navigation }) {
         }
       } catch (_) {
         if (mounted) {
-          Alert.alert('アクセスできません', 'この画面は役員・部長・事務のみが閲覧できます。', [
+          Alert.alert('アクセスできません', 'この画面は役員・管理職・事務のみが閲覧できます。', [
             { text: 'OK', onPress: () => navigation.goBack() },
           ]);
           setChecking(false);

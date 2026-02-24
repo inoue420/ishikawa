@@ -14,10 +14,10 @@ import { fetchBillingApproverConfig, setBillingApproverConfig } from '../../bill
 const DIVISION_OPTIONS = ['外注', '社員', 'パート', 'アルバイト'];
 const DEPT_OPTIONS = ['イベント事業', '飲食事業', 'ライフサポート事業', '安全管理', 'ASHIBAのコンビニ事業', 'office', 'サービス', '仮設・足場事業', '役員' ]; // ★ 追加：事業部
 
-// 役割（役員 / 部長 / 従業員）
+// 役割（役員 / 管理職 / 従業員）
 const ROLE_OPTIONS = [
   { value: 'executive', label: '役員' },
-  { value: 'manager',   label: '部長' },
+  { value: 'manager',   label: '管理職' },
   { value: 'employee',  label: '従業員' },
 ];
 
@@ -121,7 +121,7 @@ export default function UserRegisterScreen() {
     return () => { alive = false; };
   }, []);
 
-  // （編集時のみ）部長以上なら「請求書承認者に設定/解除」ボタンを表示
+  // （編集時のみ）管理職以上なら「請求書承認者に設定/解除」ボタンを表示
   const canShowApproverToggle = useMemo(() => {
     return !!editingEmail && (role === 'manager' || role === 'executive');
   }, [editingEmail, role]);
@@ -132,10 +132,10 @@ export default function UserRegisterScreen() {
       const targetEmail = normEmail(email);
       if (!targetEmail) return;
 
-      // 念のため：対象ユーザーが部長/役員か確認
+      // 念のため：対象ユーザーが管理職/役員か確認
       const targetUser = (users || []).find(u => normEmail(u.email) === targetEmail);
       if (!targetUser || !(targetUser.role === 'manager' || targetUser.role === 'executive')) {
-        Alert.alert('入力エラー', '請求書承認者に設定できるのは「部長」または「役員」のみです');
+        Alert.alert('入力エラー', '請求書承認者に設定できるのは「管理職」または「役員」のみです');
         return;
       }
 
@@ -155,21 +155,29 @@ export default function UserRegisterScreen() {
     }
   };
 
-  // 上長候補（従業員→部長、部長→役員）
-  // 部長不在部門のみ 役員承認を許可
+  // 上長（=勤怠の承認者）候補
+  // 従業員：管理職 or 役員 を選択可（管理職不在部門は役員のみ）
+  // 管理職：役員のみ
   const candidateSuperiors = useMemo(() => {
     if (role === 'employee') {
+      // ★ 外注は「役員のみ」
+      if (division === '外注') {
+        return users.filter(u => (u.role ?? 'employee') === 'executive');
+      }
+      // 社員 + 事業部選択時：同部門の管理職 + 役員（管理職不在なら役員のみ）
       if (division === '社員' && department) {
         const managersInDept = users.filter(
           u => (u.role === 'manager') && (u.department === department)
         );
-        // 部長が居ればその部長のみ、居なければ役員のみ
+        const executives = users.filter(u => u.role === 'executive');
         return managersInDept.length > 0
-          ? managersInDept
-          : users.filter(u => u.role === 'executive');
+          ? [...managersInDept, ...executives]
+          : executives;
       }
-      // 部門が未選択 or 社員以外 → 従来どおり部長
-      return users.filter(u => (u.role ?? 'employee') === 'manager');
+      // 社員以外（外注など）: 管理職中心。ただし役員直承認も選べるようにする
+      const managers = users.filter(u => (u.role ?? 'employee') === 'manager');
+      const executives = users.filter(u => (u.role ?? 'employee') === 'executive');
+      return [...managers, ...executives];
     } else if (role === 'manager') {
       return users.filter(u => (u.role ?? 'employee') === 'executive');
     }
@@ -185,6 +193,8 @@ export default function UserRegisterScreen() {
   const onChangeDivision = (v) => {
     setDivision(v);
     if (v !== '社員') setDepartment('');
+    // 区分が変わると上長候補も変わるのでクリア
+    setManagerLoginId('');
   };
 
   const handleSubmit = async () => {
@@ -202,36 +212,53 @@ export default function UserRegisterScreen() {
     }
     // 役割別の上長必須チェック
     if (role === 'employee' && !mgrId) {
-      return Alert.alert('入力エラー', '従業員の場合は上長（部長）を選択してください');
+      return Alert.alert(
+        '入力エラー',
+        division === '外注'
+          ? '外注の場合は上長（役員）を選択してください'
+          : '従業員の場合は上長（管理職 または 役員）を選択してください'
+      );
     }
     if (role === 'manager' && !mgrId) {
-      return Alert.alert('入力エラー', '部長の場合は上長（役員）を選択してください');
+      return Alert.alert('入力エラー', '管理職の場合は上長（役員）を選択してください');
     }
 
     // 追加：上長の役割を厳密チェック（誤配線防止）
     const mgr = users.find(u => (u?.loginId || '').toLowerCase() === mgrId);
     if (role === 'employee') {
-      if (division === '社員' && dept) {
-        // 部長がいれば部長のみ／いなければ役員のみ
+      // ★ 外注は「役員のみ」
+      if (division === '外注') {
+        if (!mgr || mgr.role !== 'executive') {
+          return Alert.alert('入力エラー', '外注の場合、上長は「役員」を選択してください。');
+        }
+      } else if (division === '社員' && dept) {
+        // 管理職がいれば管理職 or 役員／いなければ役員のみ
+      }
+      else if (division === '社員' && dept) {
+        // 管理職がいれば管理職 or 役員／いなければ役員のみ
         if (hasManagerInDept) {
-          if (!mgr || mgr.role !== 'manager') {
-            return Alert.alert('入力エラー', 'この部門には部長が在籍しています。上長は「部長」を選択してください。');
+          if (!mgr || (mgr.role !== 'manager' && mgr.role !== 'executive')) {
+            return Alert.alert('入力エラー', 'この部門には管理職が在籍しています。上長は「管理職」または「役員」を選択してください。');
+          }
+          // 念のため：管理職を選んだ場合は同部門に限定
+          if (mgr?.role === 'manager' && mgr?.department && mgr.department !== dept) {
+            return Alert.alert('入力エラー', '管理職を選択する場合は、同じ事業部の管理職を選択してください。');
           }
         } else {
           if (!mgr || mgr.role !== 'executive') {
-            return Alert.alert('入力エラー', 'この部門は部長不在のため、上長は「役員」を選択してください。');
+            return Alert.alert('入力エラー', 'この部門は管理職不在のため、上長は「役員」を選択してください。');
           }
         }
       } else {
-        // 部門なし等は従来どおり部長のみ（必要に応じて調整可）
-        if (!mgr || mgr.role !== 'manager') {
-          return Alert.alert('入力エラー', '上長は「部長」を選択してください。');
+        // 部門なし等（外注以外）は管理職/役員のどちらでもOK
+        if (!mgr || (mgr.role !== 'manager' && mgr.role !== 'executive')) {
+          return Alert.alert('入力エラー', '上長は「管理職」または「役員」を選択してください。');
         }
       }
     }
     if (role === 'manager') {
       if (!mgr || mgr.role !== 'executive') {
-        return Alert.alert('入力エラー', '部長の上長は「役員」のみ選択できます。');
+        return Alert.alert('入力エラー', '管理職の上長は「役員」のみ選択できます。');
       }
     }
 
@@ -325,9 +352,11 @@ export default function UserRegisterScreen() {
 
   const superiorLabel =
     role === 'employee'
-      ? (division === '社員' && department
-          ? (hasManagerInDept ? '上長（部長 / loginId）' : '上長（役員 / loginId）')
-          : '上長（部長 / loginId）')
+      ? (division === '外注'
+          ? '上長（役員 / loginId）'
+          : (division === '社員' && department
+              ? (hasManagerInDept ? '上長（管理職 または 役員 / loginId）' : '上長（役員 / loginId）')
+              : '上長（管理職 または 役員 / loginId）'))
       :
     role === 'manager'  ? '上長（役員 / loginId）' :
     '上長（なし）';
@@ -390,7 +419,7 @@ export default function UserRegisterScreen() {
         </>
       )}
 
-      {/* 上長（従業員→部長、部長→役員。役員は表示なし） */}
+      {/* 上長（=勤怠の承認者） 役割により候補が変わります */}
       {(role === 'employee' || role === 'manager') && (
         <>
           <Text style={styles.label}>{superiorLabel}</Text>
@@ -432,7 +461,7 @@ export default function UserRegisterScreen() {
         </View>
       )}
 
-      {/* 請求書承認者：部長以上の編集中ユーザーのみ */}
+      {/* 請求書承認者：管理職以上の編集中ユーザーのみ */}
       {canShowApproverToggle && (
         <View style={{ marginBottom: 12 }}>
           <TouchableOpacity

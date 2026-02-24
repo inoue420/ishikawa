@@ -36,7 +36,7 @@ export default function ManagerApprovalScreen({ route }) {
       const targetDate = dateKey(currentDate);
       let list = [];
       if (self.role === 'executive') {
-        // 役員宛の申請をそのまま表示（直属従業員＝部長不在部門も含む）
+        // 役員宛の申請をそのまま表示（直属従業員＝管理職不在部門も含む）
         list = await fetchPendingForManager(self.loginId, targetDate);
       } else {
         list = await fetchPendingForManager(self.loginId, targetDate);
@@ -168,7 +168,7 @@ export default function ManagerApprovalScreen({ route }) {
       <View style={tw`p-4 border-b border-gray-200 bg-white`}>
         <Text style={tw`text-lg font-semibold`}><Text>出勤認証（{dateKey(currentDate)}）</Text></Text>
         {!!managerLoginId && (
-          <Text style={tw`text-xs text-gray-600`}>承認者: {managerLoginId}{me?.role ? `（${me.role === 'executive' ? '役員' : me.role === 'manager' ? '部長' : me.role}）` : ''}</Text>
+          <Text style={tw`text-xs text-gray-600`}>承認者: {managerLoginId}{me?.role ? `（${me.role === 'executive' ? '役員' : me.role === 'manager' ? '管理職' : me.role}）` : ''}</Text>
         )}
       </View>
 
