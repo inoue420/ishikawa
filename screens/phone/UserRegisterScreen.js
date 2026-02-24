@@ -10,9 +10,10 @@ import {
   deleteUser,
 } from '../../firestoreService';
 import { fetchBillingApproverConfig, setBillingApproverConfig } from '../../billingApprovalService';
+const ISHIKAWA_COMPANY_NAME = '株式会社石川組';
 
 const DIVISION_OPTIONS = ['外注', '社員', 'パート', 'アルバイト'];
-const DEPT_OPTIONS = ['イベント事業', '飲食事業', 'ライフサポート事業', '安全管理', 'ASHIBAのコンビニ事業', 'office', 'サービス', '仮設・足場事業', '役員' ]; // ★ 追加：事業部
+const DEPT_OPTIONS = ['工事部/危機管理統括部', '調達/資機材管理部', 'サービス部/安全管理部', '技術・品質管理部', 'オフィス部' ]; // ★ 追加：事業部
 
 // 役割（役員 / 管理職 / 従業員）
 const ROLE_OPTIONS = [
@@ -58,6 +59,19 @@ export default function UserRegisterScreen() {
   const [department, setDepartment] = useState(''); // ★ 追加：事業部
   const [managerLoginId, setManagerLoginId] = useState(''); // 上長は loginId 紐付け
 
+  const isIshikawaCompany = (affiliation || '').trim() === ISHIKAWA_COMPANY_NAME;
+  const canSelectDepartment = division === '社員' && isIshikawaCompany;
+
+  // 会社名が「株式会社石川組」以外に変わったら、事業部は常に空にする
+  useEffect(() => {
+    if (!canSelectDepartment && department) setDepartment('');
+  }, [canSelectDepartment, department]);
+
+  const onChangeAffiliation = (v) => {
+    setAffiliation(v);
+    if (v.trim() !== ISHIKAWA_COMPANY_NAME) setDepartment('');
+  };
+  
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [editingEmail, setEditingEmail] = useState(null);
@@ -165,7 +179,7 @@ export default function UserRegisterScreen() {
         return users.filter(u => (u.role ?? 'employee') === 'executive');
       }
       // 社員 + 事業部選択時：同部門の管理職 + 役員（管理職不在なら役員のみ）
-      if (division === '社員' && department) {
+      if (canSelectDepartment && department) {
         const managersInDept = users.filter(
           u => (u.role === 'manager') && (u.department === department)
         );
@@ -182,7 +196,7 @@ export default function UserRegisterScreen() {
       return users.filter(u => (u.role ?? 'employee') === 'executive');
     }
     return [];
-  }, [users, role, division, department]);
+  }, [users, role, division, department, canSelectDepartment]);
 
   const onChangeRole = (newRole) => {
     setRole(newRole);
@@ -192,7 +206,8 @@ export default function UserRegisterScreen() {
   // 区分変更時、社員以外になったら事業部をクリア
   const onChangeDivision = (v) => {
     setDivision(v);
-    if (v !== '社員') setDepartment('');
+    // 事業部は「株式会社石川組」かつ「社員」のみ
+    if (v !== '社員' || !isIshikawaCompany) setDepartment('');
     // 区分が変わると上長候補も変わるのでクリア
     setManagerLoginId('');
   };
@@ -201,14 +216,14 @@ export default function UserRegisterScreen() {
     const addr = email.trim().toLowerCase();
     let   login = (loginId || '').trim().toLowerCase(); // ★ 入力は無いが内部で保持
     const mgrId = managerLoginId.trim().toLowerCase();
-    const dept  = (division === '社員') ? department.trim() : '';
+    const dept  = canSelectDepartment ? department.trim() : '';
 
     if (!addr || !name.trim() || !affiliation.trim() || !division.trim()) {
       return Alert.alert('入力エラー', '必須項目（メール・氏名・所属・区分）を入力してください');
     }
-    // 社員のときは事業部必須
-    if (division === '社員' && !dept) {
-      return Alert.alert('入力エラー', '社員の場合は事業部を選択してください');
+    // 「株式会社石川組」かつ「社員」のときだけ事業部必須
+    if (canSelectDepartment && !dept) {
+      return Alert.alert('入力エラー', '株式会社石川組の社員の場合は事業部を選択してください');
     }
     // 役割別の上長必須チェック
     if (role === 'employee' && !mgrId) {
@@ -346,15 +361,15 @@ export default function UserRegisterScreen() {
   };
 
   const hasManagerInDept = useMemo(() => {
-    if (role !== 'employee' || division !== '社員' || !department) return false;
+    if (role !== 'employee' || !canSelectDepartment || !department) return false;
     return users.some(u => u.role === 'manager' && u.department === department);
-  }, [users, role, division, department]);
+  }, [users, role, division, department, canSelectDepartment]);
 
   const superiorLabel =
     role === 'employee'
       ? (division === '外注'
           ? '上長（役員 / loginId）'
-          : (division === '社員' && department
+          : (canSelectDepartment && department
               ? (hasManagerInDept ? '上長（管理職 または 役員 / loginId）' : '上長（役員 / loginId）')
               : '上長（管理職 または 役員 / loginId）'))
       :
@@ -384,7 +399,7 @@ export default function UserRegisterScreen() {
         style={styles.input}
         placeholder="所属（会社名）"
         value={affiliation}
-        onChangeText={setAffiliation}
+        onChangeText={onChangeAffiliation}
       />
 
       {/* 区分 */}
@@ -406,8 +421,12 @@ export default function UserRegisterScreen() {
         </Picker>
       </View>
 
-      {/* ★ 事業部（社員のみ、役割と上長の間に表示） */}
-      {division === '社員' && (
+      {division === '社員' && !isIshikawaCompany && (
+        <Text style={styles.helperText}>事業部は「株式会社石川組」の社員のみ登録できます</Text>
+      )}
+
+      {/* ★ 事業部（株式会社石川組の社員のみ、役割と上長の間に表示） */}
+      {canSelectDepartment && (
         <>
           <Text style={styles.label}>事業部</Text>
           <View style={styles.pickerWrapper}>
@@ -483,7 +502,7 @@ export default function UserRegisterScreen() {
           <View style={{ flex: 1, paddingRight: 8 }}>
             <Text>{u.email}</Text>
             <Text>{u.name} / {u.affiliation} / {u.division ?? '-'}</Text>
-            {u.division === '社員' && (
+            {u.division === '社員' && ((u.affiliation || '').trim() === ISHIKAWA_COMPANY_NAME) && (
               <Text style={{ color: '#333' }}>事業部: {u.department ?? '-'}</Text>
             )}
             <Text style={{ color: '#555' }}>
@@ -524,6 +543,7 @@ const styles = StyleSheet.create({
   heading: { fontSize: 20, marginBottom: 12, textAlign: 'center' },
   input: { borderWidth: 1, borderColor: '#ccc', padding: 8, marginBottom: 12, borderRadius: 4 },
   label: { marginBottom: 6, fontSize: 14, color: '#333' },
+  helperText: { marginTop: 4, marginBottom: 8, color: '#555' },
   pickerWrapper: {
     borderWidth: 1, borderColor: '#ccc', borderRadius: 4,
     marginBottom: 12, overflow: 'hidden', backgroundColor: '#fff',

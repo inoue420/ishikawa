@@ -173,21 +173,23 @@ const calcWorkHours = (start, end) => {
 // ─────────────────────────────────────────
 // 事業部（department）グルーピング設定
 // UserRegisterScreen.js の DEPT_OPTIONS と同順
-// const DEPT_OPTIONS = ['イベント事業','飲食事業','ライフサポート事業','安全管理','ASHIBAのコンビニ事業','office','サービス','仮設・足場事業','役員'];
+// // const DEPT_OPTIONS = ['工事部/危機管理統括部','調達/資機材管理部','サービス部/安全管理部','技術・品質管理部','オフィス部'];
 // ─────────────────────────────────────────
 const ALL_DEPT_OPTIONS = [
-  'イベント事業',
-  '飲食事業',
-  'ライフサポート事業',
-  '安全管理',
-  'ASHIBAのコンビニ事業',
-  'office',
-  'サービス',
-  '仮設・足場事業',
-  '役員',
+  '工事部/危機管理統括部',
+  '調達/資機材管理部',
+  'サービス部/安全管理部',
+  '技術・品質管理部',
+  'オフィス部',
 ];
-// 表示対象をこの4部門に固定
-const ALLOWED_DEPTS = ['仮設・足場事業','イベント事業','ASHIBAのコンビニ事業','サービス'];
+// 表示対象（トグル表示）をこの5部門に固定
+const ALLOWED_DEPTS = [
+  '工事部/危機管理統括部',
+  '調達/資機材管理部',
+  'サービス部/安全管理部',
+  '技術・品質管理部',
+  'オフィス部',
+];
 const FALLBACK_DEPT = '(未設定)'; // 旧データ救済用
 
 export default function ProjectRegisterScreen({ route }) {
@@ -262,8 +264,8 @@ export default function ProjectRegisterScreen({ route }) {
 
   // 従業員・担当
   const [employees, setEmployees] = useState([]);
-  // 表示する事業部（4部門のみをトグル選択）
-  const [visibleDeptSet, setVisibleDeptSet] = useState(new Set(['仮設・足場事業']));
+ // 表示する事業部（固定部門をトグル選択）
+ const [visibleDeptSet, setVisibleDeptSet] = useState(new Set(['工事部/危機管理統括部']));
 
   // 事業部→従業員 のグルーピング（division === '社員' のみ事業部に分類）
   const deptEmployeesOrdered = useMemo(() => {

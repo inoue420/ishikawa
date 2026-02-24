@@ -34,12 +34,13 @@ const DLOG = (...args) => {
 
 // ─────────────────────────────────────────────
 // 役割判定（統一ロジック）
-//   executive / manager / office（department==='office'）を特権ユーザー扱い
+//   executive / manager / office（department==='office'）/ オフィス部 を特権ユーザー扱い
 // ─────────────────────────────────────────────
 export function isPrivUser(me) {
   if (!me) return false;
-  const dept = String(me.department ?? '').toLowerCase();
-  return me.role === 'executive' || me.role === 'manager' || dept === 'office';
+  const dept = String(me.department ?? '').trim();
+  const deptLower = dept.toLowerCase();
+  return me.role === 'executive' || me.role === 'manager' || deptLower === 'office' || dept === 'オフィス部';
 }
 
 // 'YYYY-MM-DD' をローカル日付として Date を作る（UTC解釈を回避）
@@ -880,6 +881,11 @@ export async function updateMaterialUsage(usageId, quantity) {
 export async function registerUser(data) {
   const email = data.email.trim().toLowerCase();
   const ref = doc(employeesCol, email);
+
+  // 事業部は「株式会社石川組」かつ「社員」のみ保存できる
+  const allowDepartment = ((data.affiliation || '').trim() === '株式会社石川組')
+    && ((data.division || '').trim() === '社員');
+  const sanitizedDepartment = allowDepartment ? ((data.department || '').trim()) : '';
   await setDoc(
     ref,
     {
@@ -887,6 +893,7 @@ export async function registerUser(data) {
       department: '',
       managerLoginId: '',
       ...data,
+      department: sanitizedDepartment,
       email,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -977,7 +984,21 @@ export async function updateUser(target, data) {
     }
   }
   if (!ref) throw new Error(`No user document found for key=${key}`);
-  return updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
+  const next = { ...data };
+  const hasAff = Object.prototype.hasOwnProperty.call(next, 'affiliation');
+  const hasDiv = Object.prototype.hasOwnProperty.call(next, 'division');
+  const hasDept = Object.prototype.hasOwnProperty.call(next, 'department');
+
+  // 事業部は「株式会社石川組」かつ「社員」のみ保存できる
+  if (hasAff && ((next.affiliation || '').trim() !== '株式会社石川組')) next.department = '';
+  if (hasDiv && ((next.division || '').trim() !== '社員')) next.department = '';
+  if ((hasAff || hasDiv) && hasDept) {
+    const allowDepartment = ((next.affiliation || '').trim() === '株式会社石川組')
+      && ((next.division || '').trim() === '社員');
+    next.department = allowDepartment ? ((next.department || '').trim()) : '';
+  }
+
+  return updateDoc(ref, { ...next, updatedAt: serverTimestamp() });
 }
 
 /**
