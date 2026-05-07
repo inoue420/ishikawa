@@ -59,14 +59,14 @@ export default function PhoneNavigator({ userEmail }) {
       <Tab.Screen
         name="Overall"
         component={OverallStackNavigator}
-        options={{ title: 'Overall' }}
+        options={{ title: 'メニュー' }}
         initialParams={{ userEmail }} // ★ 追加：Overall配下にも userEmail を伝搬
       />
 
       <Tab.Screen
         name="Schedule"
         component={ScheduleScreen}
-        options={{ title: 'スケジュール' }}
+        options={{ title: '予定' }}
         initialParams={{ userEmail }} // ★ 追加
       />
 
@@ -74,7 +74,7 @@ export default function PhoneNavigator({ userEmail }) {
       <Tab.Screen
         name="HomeStack"
         component={HomeStackNavigator}
-        options={{ title: 'Home' }}
+        options={{ title: '本日' }}
         initialParams={{ userEmail }}
       />
 
@@ -82,7 +82,7 @@ export default function PhoneNavigator({ userEmail }) {
       <Tab.Screen
         name="Attendance"
         component={AttendanceScreen}
-        options={{ title: '出退勤' }}
+        options={{ title: '勤怠' }}
         initialParams={{ userEmail }}
       />
       <Tab.Screen
