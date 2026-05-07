@@ -12,21 +12,21 @@
       "distribution": "internal"
     },
     "production": {
-      "autoIncrement": false
+      "autoIncrement": false,
+      "ios": {
+        "image": "macos-sequoia-15.6-xcode-26.0"
+      }
     }
   },
   "submit": {
     "production": {
       "ios": {
         "appleId": "inotake420@yahoo.co.jp",
-        "ascAppId": "1571777684",
+        "ascAppId": "6751777684",
         "appleTeamId": "83427FXVCY",
         "ascApiKeyPath": "C:\\Users\\81902\\Documents\\handball\\AuthKey_FJX5PKZ69W.p8",
-        "ascApiKeyId": "FJX5PKZ69W"
-      },
-
-      "android": {
-        "serviceAccountKeyPath": "C:\\Users\\81902\\Documents\\handball\\AuthKey_FJX5PKZ69W.p8"
+        "ascApiKeyId": "FJX5PKZ69W",
+        "ascApiKeyIssuerId": "25459f54-877f-4208-a4fb-848547a170f9"
       }
     }
   }
