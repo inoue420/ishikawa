@@ -8,18 +8,20 @@ import {
   TouchableOpacity,
   TextInput,
   Platform,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
 import { fetchUserByEmail, fetchAttendanceByEmployeeAndDate, requestPunch } from '../../firestoreService';
+import { signOut } from 'firebase/auth';
 
 import {
   updateDoc,
   doc,
   Timestamp,
 } from 'firebase/firestore';
-import { db } from '../../firebaseConfig';
+import { db, auth } from '../../firebaseConfig';
 // 追加：簡易チェックUI（☑/☐）
 const Check = React.memo(function Check({ label, checked, onPress }) {
   return (
@@ -35,6 +37,28 @@ export default function AttendanceScreen({ route }) {
   console.log('[AttendanceScreen] route.params.userEmail:', route.params?.userEmail);
 
   const userEmail = route.params?.userEmail ?? 'admin';
+
+  // OverallScreen と同じログアウト処理
+  const doLogout = async () => {
+    try {
+      await signOut(auth); // onAuthStateChanged(App.js) 側で未ログインルートへ遷移
+    } catch (e) {
+      console.warn('signOut error:', e);
+      Alert.alert('ログアウトに失敗しました', e?.message ?? String(e));
+    }
+  };
+
+  const showConfirmLogout = () => {
+    Alert.alert(
+      'ログアウトしますか',
+      '現在のアカウントからサインアウトします。',
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        { text: 'ログアウトする', style: 'destructive', onPress: doLogout },
+      ]
+    );
+  };
+
   // この画面は“初期表示は常に本日”にする（DateContext とは切り離す）
   const [currentDate, setCurrentDate] = useState(() => new Date()); // ← 初期値 = 本日
   // ※もし「常に本日に固定（ピッカー変更も無効）」にしたい場合は、
@@ -195,6 +219,7 @@ const Empty = React.memo(function Empty() {
 
 return (
   <SafeAreaView edges={['top']} style={tw`flex-1 bg-gray-100`}>
+    <View style={tw`flex-1`}>
     <View>
       <View style={tw`flex-row items-center p-4 bg-white border-b border-gray-300`}>
         <TouchableOpacity style={tw`flex-1`} onPress={() => setShowDatePicker(true)}>
@@ -250,7 +275,7 @@ return (
       keyExtractor={(item) => String(item.id)}
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={true}
-      contentContainerStyle={tw`pb-10`}
+      contentContainerStyle={tw`pb-24`}
       ListHeaderComponent={<Header />}
       renderItem={({ item }) => (
         <View style={tw`bg-white px-4 py-2 border-b border-gray-200 flex-row justify-between items-center`}>
@@ -284,6 +309,19 @@ return (
       )}
       ListEmptyComponent={<Empty />}
     />
+
+      {/* OverallScreen と同じ右下固定ログアウトボタン */}
+      <View style={tw`absolute bottom-4 right-4`}>
+        <TouchableOpacity
+          onPress={showConfirmLogout}
+          activeOpacity={0.7}
+          style={tw`bg-red-500 rounded-2xl px-4 py-3 shadow`}
+        >
+          <Text style={tw`text-white font-bold`}><Text>ログアウト</Text></Text>
+        </TouchableOpacity>
+      </View>
+
+      </View>
    </SafeAreaView>
 );
 }

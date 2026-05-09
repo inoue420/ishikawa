@@ -11,7 +11,8 @@ import WIPStackNavigator from '../screens/phone/WIPStackNavigator';
 // BillingScreen は参照用として残すが、タブには登録しない
 // import BillingScreen from '../screens/phone/BillingScreen';
 import ProfileStackScreen from '../screens/phone/ProfileStackScreen';
-import OverallStackNavigator from '../screens/phone/OverallStackNavigator';
+// OverallScreen は残すが、ユーザー要望により下部タブからは非表示
+//import OverallStackNavigator from '../screens/phone/OverallStackNavigator';
 import { getAuth } from 'firebase/auth';
 import { findEmployeeByIdOrEmail, isPrivUser } from '../firestoreService';
 
@@ -36,12 +37,12 @@ export default function PhoneNavigator({ userEmail }) {
 
   return (
     <Tab.Navigator
-      initialRouteName="Overall" // ★ログイン後の初期タブをOverallへ
+      initialRouteName="HomeStack" // ★Overall非表示に伴い、ログイン後の初期タブをHomeへ
       screenOptions={({ route }) => ({
         tabBarIcon: ({ color, size }) => {
           let iconName = 'ellipse-outline';
           switch (route.name) {
-            case 'Overall':    iconName = 'grid-outline'; break;     // ★新規
+            //case 'Overall':    iconName = 'grid-outline'; break;     // ★新規
             case 'Schedule': iconName = 'calendar-outline'; break;
             case 'HomeStack':  iconName = 'home-outline'; break;
             case 'Attendance': iconName = 'time-outline'; break;
@@ -55,13 +56,8 @@ export default function PhoneNavigator({ userEmail }) {
         headerShown: false,
       })}
     >
-      {/* ★ 一番左に Overall を配置 */}
-      <Tab.Screen
-        name="Overall"
-        component={OverallStackNavigator}
-        options={{ title: 'メニュー' }}
-        initialParams={{ userEmail }} // ★ 追加：Overall配下にも userEmail を伝搬
-      />
+  {/* Overall はユーザー要望により下部タブから非表示。
+      OverallScreen / OverallStackNavigator 自体は残す。 */}
 
       <Tab.Screen
         name="Schedule"
@@ -94,14 +90,14 @@ export default function PhoneNavigator({ userEmail }) {
       <Tab.Screen
         name="WIP"
         component={WIPStackNavigator}
-        options={{ title: '請求管理' }}
+        options={{ title: '出力管理' }}
         initialParams={{ userEmail }} // ★ 追加
       />
       {isPrivUser(me) && (
         <Tab.Screen
           name="Profile"
           component={ProfileStackScreen}
-          options={{ title: 'プロフィール' }}
+          options={{ title: '設定' }}
           initialParams={{ userEmail }} // ★ 追加
           listeners={({ navigation }) => ({
             tabPress: () => {
