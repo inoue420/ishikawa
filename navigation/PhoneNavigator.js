@@ -87,12 +87,14 @@ export default function PhoneNavigator({ userEmail }) {
         options={{ title: '資機材' }}
         initialParams={{ userEmail }}      
       />
-      <Tab.Screen
-        name="WIP"
-        component={WIPStackNavigator}
-        options={{ title: '出力管理' }}
-        initialParams={{ userEmail }} // ★ 追加
-      />
+      {isPrivUser(me) && (
+        <Tab.Screen
+          name="WIP"
+          component={WIPStackNavigator}
+          options={{ title: '出力管理' }}
+          initialParams={{ userEmail }} // ★ 追加
+        />
+      )}
       {isPrivUser(me) && (
         <Tab.Screen
           name="Profile"

@@ -19,7 +19,10 @@ import {
   updateBillingAmount,
   deleteBillingEntry, 
   fetchClients,
+  findEmployeeByIdOrEmail,
+  isPrivUser,
 } from '../../firestoreService';
+import { getAuth } from 'firebase/auth';
 
 import { submitInvoiceApprovalRequest } from '../../billingApprovalService';
 
@@ -35,6 +38,8 @@ const statusLabel = (s) =>
 
 export default function WIPScreen() {
   const [loading, setLoading]   = useState(true);
+  const [checkingAccess, setCheckingAccess] = useState(true);
+  const [canAccess, setCanAccess] = useState(false);
   const [projects, setProjects] = useState([]);
   const [billingsMap, setBillingsMap] = useState({});
   const [inputs, setInputs]     = useState({});
@@ -54,6 +59,47 @@ export default function WIPScreen() {
   const route = useRoute();
   const userEmail = String(route?.params?.userEmail || '').trim().toLowerCase();
   const userLoginId = String(route?.params?.loginId || route?.params?.userLoginId || '').trim().toLowerCase();
+
+  // 直リンク対策：ProfileScreen と同じく、役員・マネージャー・オフィス部のみ閲覧可
+  useEffect(() => {
+    let mounted = true;
+
+    (async () => {
+      try {
+        const a = getAuth();
+        const email = userEmail || a?.currentUser?.email || null;
+        const me = email ? await findEmployeeByIdOrEmail(email) : null;
+
+        if (!mounted) return;
+
+        if (!isPrivUser(me)) {
+          setCanAccess(false);
+          Alert.alert(
+            'アクセスできません',
+            'この画面は役員・管理職・事務のみが閲覧できます。',
+            [{ text: 'OK', onPress: () => navigation.goBack() }]
+          );
+        } else {
+          setCanAccess(true);
+        }
+      } catch (_) {
+        if (!mounted) return;
+
+        setCanAccess(false);
+        Alert.alert(
+          'アクセスできません',
+          'この画面は役員・管理職・事務のみが閲覧できます。',
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        );
+      } finally {
+        if (mounted) setCheckingAccess(false);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [navigation, userEmail]);
 
   const confirmAsync = (title, message) =>
     new Promise((resolve) => {
@@ -122,20 +168,22 @@ export default function WIPScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      if (checkingAccess || !canAccess) return;
       const first = !didFocusLoadRef.current;
       didFocusLoadRef.current = true;
       loadWip({ showLoading: first });
-    }, [loadWip])
+    }, [checkingAccess, canAccess, loadWip])
   );
 
   const onRefresh = useCallback(async () => {
+    if (checkingAccess || !canAccess) return;
     setRefreshing(true);
     try {
       await loadWip({ showLoading: false });
     } finally {
       setRefreshing(false);
     }
-  }, [loadWip]);
+  }, [checkingAccess, canAccess, loadWip]);
 
   const pToDate = (v) => {
     if (!v) return null;
@@ -738,7 +786,7 @@ const revertBillingBillableToPending = async (projId, billId) => {
     }
   };
 
-  if (loading) {
+  if (checkingAccess || !canAccess || loading) {
     return (
       <SafeAreaView edges={['top']} style={tw`flex-1 justify-center items-center`}>
         <ActivityIndicator />
