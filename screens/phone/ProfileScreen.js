@@ -142,6 +142,9 @@ export default function ProfileScreen({ navigation }) {
           <Button title="CSV出力設定へ" onPress={() => navigation.navigate('ExportSettings')} />
         </View>
         <View style={styles.buttonWrapper}>
+          <Button title="編集履歴" onPress={() => navigation.navigate('ChangeLog')} />
+        </View>
+        <View style={styles.buttonWrapper}>
           <Button title="ログアウト" color="red" onPress={handleLogout} />
         </View>
       </ScrollView>

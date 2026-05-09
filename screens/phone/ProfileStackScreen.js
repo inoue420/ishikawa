@@ -10,6 +10,7 @@ import ProjectRegisterScreen  from './ProjectRegisterScreen';
 import ExportSettingsScreen   from './ExportSettingsScreen'; 
 import VehicleRegisterScreen from './VehicleRegisterScreen';
 import ClientInfoScreen       from './ClientInfoScreen';
+import ChangeLog from './ChangeLog';
 
 const ProfileStack = createStackNavigator();
 
@@ -22,6 +23,12 @@ export default function ProfileStackScreen({ route }) {
         component={ProfileScreen}
         options={{ title: 'プロフィール' }}
         initialParams={{ userEmail }}
+      />
+      <ProfileStack.Screen
+      name="ChangeLog"
+      component={ChangeLog}
+      options={{ title: '編集履歴' }}
+      initialParams={{ userEmail }}
       />
       <ProfileStack.Screen
         name="UserRegister"
