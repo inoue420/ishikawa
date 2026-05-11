@@ -1,6 +1,6 @@
 // screens/ProfileScreen.js
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -10,11 +10,13 @@ import {
   ScrollView,
   Dimensions,
   StyleSheet,
+  TouchableOpacity,
 } from 'react-native';
 import tw from 'twrnc';
 import { signOut } from 'firebase/auth';
 import { auth } from '../../firebaseConfig';
 import { getAuth } from 'firebase/auth';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 // Firestore service 関数をインポート
 import {
@@ -82,6 +84,47 @@ export default function ProfileScreen({ navigation }) {
     })();
   }, []);
 
+  const doLogout = useCallback(async () => {
+    try {
+      await signOut(auth);
+      // ここで画面遷移はしない：onAuthStateChanged(App.js) が自動で
+      // 認証なしルート（SignIn など）を表示します
+    } catch (e) {
+      console.warn('signOut error:', e);
+      Alert.alert('ログアウトに失敗しました', e?.message ?? String(e));
+    }
+  }, []);
+
+  const showConfirmLogout = useCallback(() => {
+    Alert.alert(
+      'ログアウトしますか',
+      '現在のアカウントからサインアウトします。',
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        { text: 'ログアウトする', style: 'destructive', onPress: doLogout },
+      ]
+    );
+  }, [doLogout]);
+
+  useEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity
+          onPress={showConfirmLogout}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel="ログアウト"
+          style={tw`mr-4 w-10 h-10 rounded-full bg-white items-center justify-center`}
+        >
+          <Text>
+            <Ionicons name="log-out-outline" size={30} color="#3B82F6" />
+          </Text>
+        </TouchableOpacity>
+      ),
+    });
+  }, [navigation, showConfirmLogout]);
+
+
   if (checking) {
     // 権限確認中は何も表示しない（フラッシュ防止）
     return <View style={tw`flex-1 bg-white`} />;
@@ -107,19 +150,10 @@ export default function ProfileScreen({ navigation }) {
     }
   };
 
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      // ここで画面遷移はしない：onAuthStateChanged(App.js) が自動で
-      // 認証なしルート（SignIn など）を表示します
-    } catch (e) {
-      console.warn('signOut error:', e);
-      Alert.alert('ログアウトに失敗しました', e?.message ?? String(e));
-    }
-  };
 
   return (
     <View style={tw`flex-1 flex-row bg-gray-100`}>
+
       {/* Left column: navigation */}
       <ScrollView style={styles.leftColumn} contentContainerStyle={styles.leftContainer}>
         <Text style={styles.menuTitle}>メニュー</Text>
@@ -143,9 +177,6 @@ export default function ProfileScreen({ navigation }) {
         </View>
         <View style={styles.buttonWrapper}>
           <Button title="編集履歴" onPress={() => navigation.navigate('ChangeLog')} />
-        </View>
-        <View style={styles.buttonWrapper}>
-          <Button title="ログアウト" color="red" onPress={handleLogout} />
         </View>
       </ScrollView>
 

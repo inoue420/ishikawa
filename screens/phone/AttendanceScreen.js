@@ -11,6 +11,7 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import tw from 'twrnc';
 import { fetchUserByEmail, fetchAttendanceByEmployeeAndDate, requestPunch } from '../../firestoreService';
@@ -138,7 +139,7 @@ export default function AttendanceScreen({ route }) {
       setShowDatePicker(false);
     }
   }, [showDatePicker]);
-
+ 
   // 出退勤打刻 (既存レコードがあれば更新、なければ作成)
     const handlePunch = async (type) => {
       if (!acCompleted) return; // 二重防止（UIでも無効化）
@@ -218,7 +219,20 @@ const Empty = React.memo(function Empty() {
 });
 
 return (
-  <SafeAreaView edges={['top']} style={tw`flex-1 bg-gray-100`}>
+  <SafeAreaView edges={['top']} style={tw`flex-1 bg-gray-100 relative`}>
+
+  {/* 右上に重ねるログアウトアイコン */}
+  <TouchableOpacity
+    onPress={showConfirmLogout}
+    activeOpacity={0.7}
+    accessibilityRole="button"
+    accessibilityLabel="ログアウト"
+    style={tw`absolute top-18 right-4 z-10 w-11 h-11 rounded-full bg-white items-center justify-center shadow`}
+  >
+    <Text>
+      <Ionicons name="log-out-outline" size={30} color="#3B82F6" />
+    </Text>
+  </TouchableOpacity>
     <View style={tw`flex-1`}>
     <View>
       <View style={tw`flex-row items-center p-4 bg-white border-b border-gray-300`}>
@@ -309,17 +323,6 @@ return (
       )}
       ListEmptyComponent={<Empty />}
     />
-
-      {/* OverallScreen と同じ右下固定ログアウトボタン */}
-      <View style={tw`absolute bottom-4 right-4`}>
-        <TouchableOpacity
-          onPress={showConfirmLogout}
-          activeOpacity={0.7}
-          style={tw`bg-red-500 rounded-2xl px-4 py-3 shadow`}
-        >
-          <Text style={tw`text-white font-bold`}><Text>ログアウト</Text></Text>
-        </TouchableOpacity>
-      </View>
 
       </View>
    </SafeAreaView>
